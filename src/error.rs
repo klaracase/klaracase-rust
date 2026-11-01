@@ -12,13 +12,17 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::{Map, Value};
 
 use crate::documents::DocumentReceipt;
-use crate::open::response_struct;
+use crate::open::{Open, response_struct};
+use crate::types::InsufficientCreditsReason;
 
 /// The longest body excerpt kept in [`Problem::detail`] for an answer that is not a problem.
 const DETAIL_LIMIT: usize = 1_000;
 
 /// The `code` of a problem built from an answer that was not a problem body.
 pub const UNKNOWN_CODE: &str = "unknown";
+
+/// The `code` of a 402 answer that says the credit limit of one API key is used up.
+const TOKEN_LIMIT_REACHED_CODE: &str = "token_limit_reached";
 
 /// The `code` of [`Error::ClientValidation`].
 pub const CLIENT_VALIDATION_CODE: &str = "client_validation";
@@ -43,7 +47,9 @@ response_struct! {
 /// body stays readable in [`Problem::extra`]. Five members that carry a decision are also typed:
 /// [`candidates`](Self::candidates), [`successor`](Self::successor), [`unit`](Self::unit),
 /// [`cap`](Self::cap) and [`resets_at`](Self::resets_at). They are `None` when the answer has no such
-/// member or it has another type, and they are copies: `extra` still holds them.
+/// member or it has another type, and they are copies: `extra` still holds them. The members of the
+/// 402 answers (`reason`, `top_up_url`, `spent`, `settings_url`) are typed on [`Error`] and stay in
+/// `extra` too.
 ///
 /// For an answer that is not a problem (an HTML 502 from a proxy, `{"message": "Server Error"}`, an
 /// empty body) the SDK builds a problem with `code = "unknown"` and the raw body text in `detail`, cut
@@ -71,11 +77,14 @@ pub struct Problem {
     pub candidates: Option<Vec<Candidate>>,
     /// On 404 `statute_superseded`: the statute that replaced the one cited, for example `BauGB`.
     pub successor: Option<String>,
-    /// On 429 `volume_cap`: the capped unit, `rows` or `documents`.
+    /// On 429 `volume_cap`: the capped unit, `rows` or `documents`. On 402 `token_limit_reached`:
+    /// always `credits`.
     pub unit: Option<String>,
-    /// On 429 `volume_cap`: the organization's daily cap for that unit.
+    /// On 429 `volume_cap`: the organization's daily cap for that unit. On 402
+    /// `token_limit_reached`: the credit limit of the API key for the period.
     pub cap: Option<u64>,
-    /// On 429 `volume_cap`: when the daily cap resets, an RFC 3339 time.
+    /// On 429 `volume_cap`: when the daily cap resets, an RFC 3339 time. On 402
+    /// `token_limit_reached`: when the credit period of the key ends and its count starts again.
     pub resets_at: Option<String>,
     headers: HeaderMap,
 }
@@ -229,6 +238,15 @@ fn problem_members(body: &[u8]) -> Option<(String, Map<String, Value>)> {
     }
 }
 
+/// A string member of the problem body, or `None` when it is absent or not a string.
+fn extra_text(problem: &Problem, key: &str) -> Option<String> {
+    problem
+        .extra
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
 fn reason_phrase(status: u16) -> &'static str {
     match status {
         400 => "Bad Request",
@@ -301,13 +319,49 @@ pub enum Error {
     #[error("validation failed: {0}")]
     Validation(Box<Problem>),
 
-    /// HTTP 402. The organization has too few credits. Retrying does not help.
+    /// HTTP 402 `insufficient_credits`. The organization has too few plan credits, and the prepaid
+    /// API budget, if any, does not cover the call. Nothing ran and nothing was charged. Retrying
+    /// does not help: stop and report to your user.
+    ///
+    /// `reason` and `top_up_url` appear only while the prepaid API budget is available. A reason this
+    /// crate does not know reads as [`Open::Other`]: treat it like
+    /// [`InsufficientCreditsReason::ApiBudgetNotAvailable`].
     #[error("insufficient credits: {problem}")]
     InsufficientCredits {
         /// Credits the call costs.
         cost: Option<i64>,
-        /// Credits left.
+        /// Plan credits left.
         balance: Option<i64>,
+        /// Why the call could not be paid, when the answer says. `None` for an answer without
+        /// `reason`.
+        reason: Option<Open<InsufficientCreditsReason>>,
+        /// The page where an organization admin loads the API budget. For a human admin only: show
+        /// it to your user, and never open or follow it from a program or an AI agent. `None` when
+        /// the organization may not load a budget.
+        top_up_url: Option<String>,
+        /// The full problem.
+        problem: Box<Problem>,
+    },
+
+    /// HTTP 402 `token_limit_reached`. The credit limit of this API key for the period is used up.
+    /// Nothing ran and nothing was charged. Retrying does not help before `resets_at`: stop and
+    /// report to your user.
+    ///
+    /// The answer has no `cost` and no `balance`. Only an organization admin can change the limit.
+    #[error("API key limit reached: {problem}")]
+    TokenLimitReached {
+        /// The unit of the limit: always `credits`.
+        unit: Option<String>,
+        /// The credit limit of the key for the period.
+        cap: Option<u64>,
+        /// The credits the key has used in the period, plan credits and API budget together.
+        spent: Option<u64>,
+        /// When the credit period of the key ends and its count starts again, an RFC 3339 time as
+        /// the server sent it.
+        resets_at: Option<String>,
+        /// The page where an organization admin changes the limit. For a human admin only: show it
+        /// to your user, and never open or follow it from a program or an AI agent.
+        settings_url: Option<String>,
         /// The full problem.
         problem: Box<Problem>,
     },
@@ -404,9 +458,9 @@ impl Error {
             | Self::Validation(problem)
             | Self::ServiceUnavailable(problem)
             | Self::Api(problem) => Some(problem),
-            Self::InsufficientCredits { problem, .. } | Self::RateLimit { problem, .. } => {
-                Some(problem)
-            }
+            Self::InsufficientCredits { problem, .. }
+            | Self::TokenLimitReached { problem, .. }
+            | Self::RateLimit { problem, .. } => Some(problem),
             _ => None,
         }
     }
@@ -501,9 +555,19 @@ impl Error {
         let problem = Box::new(problem);
         match status {
             401 => Self::Authentication(problem),
+            402 if problem.code == TOKEN_LIMIT_REACHED_CODE => Self::TokenLimitReached {
+                unit: problem.unit.clone(),
+                cap: problem.cap,
+                spent: problem.extra.get("spent").and_then(Value::as_u64),
+                resets_at: problem.resets_at.clone(),
+                settings_url: extra_text(&problem, "settings_url"),
+                problem,
+            },
             402 => Self::InsufficientCredits {
                 cost: problem.extra.get("cost").and_then(Value::as_i64),
                 balance: problem.extra.get("balance").and_then(Value::as_i64),
+                reason: extra_text(&problem, "reason").map(Open::from),
+                top_up_url: extra_text(&problem, "top_up_url"),
                 problem,
             },
             403 => Self::Permission(problem),
@@ -569,5 +633,177 @@ impl Serialize for Error {
             &self.retry_after().map(|d| d.as_secs()),
         )?;
         out.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn error(status: u16, body: &Value) -> Error {
+        let problem = Problem::from_answer(
+            status,
+            Some("0.96.0".to_owned()),
+            &HeaderMap::new(),
+            body.to_string().as_bytes(),
+        );
+        Error::from_problem(status, problem, None)
+    }
+
+    #[test]
+    fn insufficient_credits_exposes_reason_and_top_up_url() {
+        let error = error(
+            402,
+            &json!({
+                "code": "insufficient_credits", "cost": 1, "balance": 0,
+                "reason": "api_budget_empty",
+                "top_up_url": "https://klaracase.de/org/billing/api-budget"
+            }),
+        );
+        let Error::InsufficientCredits {
+            cost,
+            balance,
+            reason,
+            top_up_url,
+            ..
+        } = &error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*cost, *balance), (Some(1), Some(0)));
+        assert_eq!(
+            *reason,
+            Some(Open::Known(InsufficientCreditsReason::ApiBudgetEmpty))
+        );
+        assert_eq!(
+            top_up_url.as_deref(),
+            Some("https://klaracase.de/org/billing/api-budget")
+        );
+        assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn the_old_402_shape_still_reads_with_no_reason_and_no_url() {
+        let error = error(
+            402,
+            &json!({"code": "insufficient_credits", "cost": 2, "balance": 1}),
+        );
+        let Error::InsufficientCredits {
+            reason, top_up_url, ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!((reason, top_up_url), (None, None));
+    }
+
+    #[test]
+    fn a_reason_the_crate_does_not_know_stays_a_string() {
+        let error = error(
+            402,
+            &json!({"code": "insufficient_credits", "reason": "plan_on_hold"}),
+        );
+        let Error::InsufficientCredits { reason, .. } = error else {
+            panic!("{error:?}");
+        };
+        let reason = reason.expect("reason");
+        assert_eq!(reason.known(), None);
+        assert_eq!(reason.as_str(), "plan_on_hold");
+    }
+
+    #[test]
+    fn the_reserved_reason_is_known() {
+        let reason: Open<InsufficientCreditsReason> = "plan_credits_exhausted".into();
+        assert_eq!(reason, InsufficientCreditsReason::PlanCreditsExhausted);
+    }
+
+    #[test]
+    fn a_reason_that_is_not_a_string_is_ignored() {
+        let error = error(402, &json!({"code": "insufficient_credits", "reason": 7}));
+        let Error::InsufficientCredits {
+            reason, problem, ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(reason, None);
+        assert_eq!(problem.extra["reason"], 7);
+    }
+
+    fn token_limit_body() -> Value {
+        json!({
+            "type": "https://klaracase.de/docs/api/errors#token_limit_reached",
+            "title": "Payment Required", "status": 402, "detail": "This API token reached its limit.",
+            "code": "token_limit_reached", "unit": "credits", "cap": 500, "spent": 500,
+            "resets_at": "2026-12-01T00:00:00+00:00",
+            "settings_url": "https://klaracase.de/org/api-keys"
+        })
+    }
+
+    #[test]
+    fn token_limit_reached_is_its_own_variant_with_typed_members() {
+        let error = error(402, &token_limit_body());
+        let Error::TokenLimitReached {
+            unit,
+            cap,
+            spent,
+            resets_at,
+            settings_url,
+            problem,
+        } = &error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(unit.as_deref(), Some("credits"));
+        assert_eq!((*cap, *spent), (Some(500), Some(500)));
+        assert_eq!(resets_at.as_deref(), Some("2026-12-01T00:00:00+00:00"));
+        assert_eq!(
+            settings_url.as_deref(),
+            Some("https://klaracase.de/org/api-keys")
+        );
+        assert_eq!(problem.extra["spent"], 500);
+        assert_eq!(error.code(), Some("token_limit_reached"));
+        assert_eq!(error.status(), Some(402));
+        assert!(!error.is_retryable());
+        assert_eq!(error.retry_after(), None);
+    }
+
+    #[test]
+    fn token_limit_reached_has_no_cost_and_no_balance_and_tolerates_missing_members() {
+        let error = error(402, &json!({"code": "token_limit_reached"}));
+        let Error::TokenLimitReached {
+            unit,
+            cap,
+            spent,
+            resets_at,
+            settings_url,
+            ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(
+            (unit, cap, spent, resets_at, settings_url),
+            (None, None, None, None, None)
+        );
+    }
+
+    #[test]
+    fn token_limit_reached_serializes_like_any_other_error() {
+        let value = serde_json::to_value(error(402, &token_limit_body())).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "code": "token_limit_reached", "status": 402,
+                "detail": "This API token reached its limit.", "retry_after_seconds": null
+            })
+        );
+    }
+
+    #[test]
+    fn the_code_decides_only_for_a_402() {
+        let error = error(429, &json!({"code": "token_limit_reached"}));
+        assert!(matches!(error, Error::RateLimit { .. }), "{error:?}");
     }
 }

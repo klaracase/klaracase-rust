@@ -321,6 +321,23 @@ wire_enum! {
     }
 }
 
+wire_enum! {
+    /// Why a 402 `insufficient_credits` call could not be paid. Held as [`Open`](crate::Open)
+    /// because the server may add reasons. Treat a reason you do not know like
+    /// [`ApiBudgetNotAvailable`](Self::ApiBudgetNotAvailable).
+    InsufficientCreditsReason {
+        /// The organization may load a prepaid API budget, and what it holds does not cover the
+        /// call. An organization admin can top it up.
+        ApiBudgetEmpty => "api_budget_empty",
+        /// The organization has no API budget to draw on, or its budget is on hold, and topping up
+        /// is not possible from its plan.
+        ApiBudgetNotAvailable => "api_budget_not_available",
+        /// Reserved for a refusal where the API budget plays no part. The API does not send it
+        /// today.
+        PlanCreditsExhausted => "plan_credits_exhausted",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
