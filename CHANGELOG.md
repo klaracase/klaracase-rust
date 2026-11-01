@@ -52,6 +52,10 @@ the changes made to the first draft.
   nightly docs.rs build and a nightly direct-minimal-versions run. `make sync-check` compares the
   fixtures with the shared contract folder.
 
+### Docs
+
+- Docs: credit period wording. Credits renew per credit period: the UTC calendar month for free organizations, the paid billing period for subscribers. Unused credits do not roll over. The docs said "calendar month" for every organization.
+
 ### Changed
 
 - `Klaracase::new("")` is a configuration error and does not read the environment. Only

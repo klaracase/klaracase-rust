@@ -685,7 +685,7 @@ impl<'a> Decisions<'a> {
     }
 
     /// Reads one decision. `GET /decisions/{id}`. The id is a UUID, an Aktenzeichen or an ECLI. The
-    /// client encodes it as one path segment. One credit per decision per month.
+    /// client encodes it as one path segment. One credit per decision per credit period.
     ///
     /// ```no_run
     /// use klaracase::Klaracase;

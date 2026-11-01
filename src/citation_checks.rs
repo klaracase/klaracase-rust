@@ -421,7 +421,7 @@ impl<'a> CitationChecks<'a> {
     /// Checks the citations of a text or of an uploaded document. `POST /citation-checks`.
     ///
     /// The call is synchronous: the answer is the finished run. It costs `max(2, ceil(chars / 5000))`
-    /// credits. The same text again in the same month costs nothing more. A 429 or 503 is retried
+    /// credits. The same text again in the same credit period costs nothing more. A 429 or 503 is retried
     /// because both guarantee that nothing ran. A dropped connection is not retried; repeating the
     /// call by hand is free in the same period.
     ///

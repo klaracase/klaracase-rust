@@ -195,7 +195,7 @@ impl Klaracase {
 
 impl Norms<'_> {
     /// Reads the current text of one norm. `GET /norms/{reference}`. The reference is a citation such
-    /// as `§ 535 BGB` or `Art. 6 DSGVO`, up to 120 characters. One credit per norm per month.
+    /// as `§ 535 BGB` or `Art. 6 DSGVO`, up to 120 characters. One credit per norm per credit period.
     ///
     /// ```no_run
     /// use klaracase::Klaracase;

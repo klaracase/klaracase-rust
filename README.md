@@ -294,7 +294,7 @@ Four helpers cover most handling, so you need not match on every variant:
 - It never retries 402, any other 4xx, 500 or 502.
 - The wait is `retry_after_seconds` from the body, else the `Retry-After` header, else exponential backoff with full jitter (up to 0.5, 1, 2 seconds, capped at 8).
 - A server-stated wait above 30 seconds is not slept. The client returns the error at once and you decide. A `volume_cap` answer is of this kind.
-- A transport error (connection, DNS, TLS, timeout) is retried for GET only. A POST whose connection dropped after the request was sent is not retried. Repeating it by hand is free in the same period, because one charge covers each operation, organization and subject per calendar month.
+- A transport error (connection, DNS, TLS, timeout) is retried for GET only. A POST whose connection dropped after the request was sent is not retried. Repeating it by hand is free in the same period, because one charge covers each operation, organization and subject per credit period.
 
 ## Configure the client
 
@@ -322,7 +322,9 @@ To test your own code without the network, hand the builder a `reqwest::Client` 
 
 Calls are billed in credits, to the organization the token is bound to. Search, norm and decision reads cost 1 credit. The citation graph costs 2. A data package costs 5. A citation check costs `max(2, ceil(chars / 5000))`. Coverage, facets, uploads and reading a finished run are free.
 
-One charge covers each operation, organization and subject per calendar month. The same call again in the same month costs nothing more, on REST or on MCP. Every response carries `credits` with `metered`, `cost` and `credits_remaining`.
+One charge covers each operation, organization and subject per credit period. The same call again in the same credit period costs nothing more, on REST or on MCP. Every response carries `credits` with `metered`, `cost` and `credits_remaining`.
+
+Credits renew per credit period: the UTC calendar month for free organizations, the paid billing period for subscribers. Unused credits do not roll over.
 
 The API allows 60 requests per minute per token. The three POST operations (`datapackages`, `citation_checks` and `citation_check_documents` upload) are limited to 10 per minute.
 

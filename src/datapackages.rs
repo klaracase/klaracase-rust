@@ -208,7 +208,7 @@ impl Datapackages<'_> {
     /// Bundles up to 10 decisions with their citations. `POST /datapackages`. Five credits.
     ///
     /// A 429 or 503 is retried, because both guarantee that nothing ran. A dropped connection is not
-    /// retried. Repeating the same package in the same month costs nothing more.
+    /// retried. Repeating the same package in the same credit period costs nothing more.
     ///
     /// ```no_run
     /// use klaracase::{CreateDatapackageParams, Klaracase};
