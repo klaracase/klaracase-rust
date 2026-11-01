@@ -98,12 +98,12 @@ impl CreateCitationCheckParams {
 /// fn describe(verdict: &str) -> &'static str {
 ///     match verdict {
 ///         Verdict::VERIFIED_CORPUS => "the cited source exists in the corpus",
-///         Verdict::NOT_FOUND => "not found in the corpus; this does not mean it is fabricated",
+///         Verdict::NOT_FOUND => "not found in the corpus; this does not mean it is invented",
 ///         Verdict::DISCREPANCY => "the source exists but a detail differs",
 ///         _ => "needs a human look",
 ///     }
 /// }
-/// assert_eq!(describe("not_found"), "not found in the corpus; this does not mean it is fabricated");
+/// assert_eq!(describe("not_found"), "not found in the corpus; this does not mean it is invented");
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Verdict;
@@ -113,7 +113,7 @@ impl Verdict {
     pub const VERIFIED_CORPUS: &'static str = "verified_corpus";
     /// The citation resolves in an external register.
     pub const VERIFIED_EXTERNAL: &'static str = "verified_external";
-    /// The citation was not found in the corpus. It is not a claim of fabrication.
+    /// The citation was not found in the corpus. That is all the verdict says.
     pub const NOT_FOUND: &'static str = "not_found";
     /// The citation points outside the period or courts the corpus covers.
     pub const OUT_OF_COVERAGE: &'static str = "out_of_coverage";

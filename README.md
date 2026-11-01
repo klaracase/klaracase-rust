@@ -228,6 +228,14 @@ klaracase = { version = "0.1", default-features = false, features = ["native-tls
 | `tokio` | yes | the default `Sleeper` uses `tokio::time`. Without it you must pass your own `Sleeper`. |
 | `log` | no | the default deprecation hook uses `log::warn!` |
 
+## Stability and privacy
+
+This SDK is 0.x and tracks API release 0.95.0. Minor versions may change the public surface until 1.0. Every change is listed in [CHANGELOG.md](CHANGELOG.md). All Klaracase SDKs bump together when the API contract changes.
+
+The SDK sends no telemetry. The only thing it adds to a request is the User-Agent header `klaracase-rust/<version> rust/<version>`, for example `klaracase-rust/0.1.0 rust/1.85.0`.
+
+Klaracase is not affiliated with any court or with the federal government.
+
 ## More
 
 - API reference: <https://klaracase.de/docs/api>

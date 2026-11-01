@@ -33,7 +33,7 @@ async fn main() -> Result<(), Error> {
     for finding in &run.findings {
         let note = match finding.verdict.as_str() {
             Verdict::VERIFIED_CORPUS => "exists in the corpus",
-            Verdict::NOT_FOUND => "not found in the corpus (this is not a claim of fabrication)",
+            Verdict::NOT_FOUND => "not found in the corpus (this does not mean it is invented)",
             Verdict::OUT_OF_COVERAGE => "outside what the corpus covers",
             Verdict::AMBIGUOUS => "more than one source fits",
             Verdict::DISCREPANCY => "the source exists but a detail differs",
