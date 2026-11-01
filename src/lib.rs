@@ -13,6 +13,7 @@ mod encode;
 mod error;
 mod norms;
 mod open;
+mod pager;
 mod params;
 mod response;
 mod retry;
@@ -20,8 +21,9 @@ mod search;
 mod types;
 
 pub use citation_checks::{
-    CheckProgress, CheckScope, CitationCheckRun, CitationChecks, CreateCitationCheckParams,
-    Evidence, Extraction, Finding, MatchedDecision, ReasonCount, UniqueCitation,
+    CheckFileRequest, CheckProgress, CheckScope, CitationCheckRun, CitationChecks,
+    CreateCitationCheckParams, Evidence, Extraction, Finding, MatchedDecision, ReasonCount,
+    UniqueCitation,
 };
 pub use client::{ClientBuilder, Klaracase};
 pub use common::{Count, Credits, QueryExpansion, Snippet};
@@ -34,8 +36,9 @@ pub use datapackages::{
 };
 pub use decisions::{
     AvailableRange, CitationEdge, CitationGraph, CitationPagination, CitationSource,
-    CitationsParams, CorpusRef, Decision, DecisionHit, DecisionMetadata, DecisionSearchResults,
-    Decisions, GetDecisionParams, ReturnedRange, SearchDecisionsParams,
+    CitationsParams, CitationsRequest, CorpusRef, Decision, DecisionHit, DecisionMetadata,
+    DecisionSearchResults, Decisions, GetDecisionParams, ReturnedRange, SearchDecisionsParams,
+    SearchRequest,
 };
 pub use deprecation::{DeprecationNotice, reset_deprecation_guard};
 pub use documents::{CitationCheckDocuments, DocumentReceipt, UploadParams, WaitParams};
@@ -45,11 +48,12 @@ pub use norms::{
     QualifierCheck, ToolHint,
 };
 pub use open::{Open, WireValue};
+pub use pager::Pager;
 pub use response::{Extras, Response, ResponseMeta};
 pub use retry::{Clock, SleepFuture, Sleeper, SystemClock};
 pub use search::{
-    CrossTypeSearchParams, CrossTypeSearchResults, LawHit, SearchSections, SectionTotals,
-    SectionTotalsBySection,
+    CrossTypeSearchParams, CrossTypeSearchRequest, CrossTypeSearchResults, LawHit, SearchSections,
+    SectionTotals, SectionTotalsBySection,
 };
 pub use types::*;
 

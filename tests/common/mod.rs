@@ -6,9 +6,11 @@
 
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use klaracase::{Clock, SleepFuture, Sleeper};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -283,4 +285,37 @@ fn decode_chunked(data: &[u8]) -> Vec<u8> {
         rest = &rest[(start + size + 2).min(rest.len())..];
     }
     out
+}
+
+/// A clock that only moves when the sleeper sleeps.
+#[derive(Clone)]
+pub struct FakeTime {
+    base: Instant,
+    pub elapsed_millis: Arc<AtomicU64>,
+    pub sleeps: Arc<Mutex<Vec<Duration>>>,
+}
+
+impl FakeTime {
+    pub fn new() -> Self {
+        Self {
+            base: Instant::now(),
+            elapsed_millis: Arc::default(),
+            sleeps: Arc::default(),
+        }
+    }
+}
+
+impl Clock for FakeTime {
+    fn now(&self) -> Instant {
+        self.base + Duration::from_millis(self.elapsed_millis.load(Ordering::SeqCst))
+    }
+}
+
+impl Sleeper for FakeTime {
+    fn sleep(&self, duration: Duration) -> SleepFuture<'_> {
+        self.elapsed_millis
+            .fetch_add(duration.as_millis() as u64, Ordering::SeqCst);
+        self.sleeps.lock().unwrap().push(duration);
+        Box::pin(async {})
+    }
 }

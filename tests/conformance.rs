@@ -185,7 +185,7 @@ async fn dispatch(
                 "bridge" => bridge(boolean),
             })
             .cited_statutes(a.list::<Statute>("cited_statutes"));
-            outcome(client.decisions().search(params).await)
+            outcome(client.decisions().search_with(params).await)
         }
         (None, "search") => {
             let params = apply!(CrossTypeSearchParams::new(a.required("query")), a, {
@@ -201,7 +201,7 @@ async fn dispatch(
                 "bridge" => bridge(boolean),
             })
             .cited_statutes(a.list::<Statute>("cited_statutes"));
-            outcome(client.search(params).await)
+            outcome(client.search_with(params).await)
         }
         (Some("decisions"), "get") => {
             let params = apply!(GetDecisionParams::default(), a, {
@@ -212,7 +212,7 @@ async fn dispatch(
                 "court" => court(text),
                 "date" => date(text),
             });
-            outcome(client.decisions().get(&a.required("id"), params).await)
+            outcome(client.decisions().get_with(&a.required("id"), params).await)
         }
         (Some("decisions"), "citations") => {
             let mut params = apply!(CitationsParams::default(), a, {
@@ -227,7 +227,7 @@ async fn dispatch(
             outcome(
                 client
                     .decisions()
-                    .citations(&a.required("id"), params)
+                    .citations_with(&a.required("id"), params)
                     .await,
             )
         }
@@ -235,7 +235,12 @@ async fn dispatch(
             let params = apply!(GetNormParams::default(), a, {
                 "jurisdiction" => jurisdiction(word),
             });
-            outcome(client.norms().get(&a.required("reference"), params).await)
+            outcome(
+                client
+                    .norms()
+                    .get_with(&a.required("reference"), params)
+                    .await,
+            )
         }
         (Some("datapackages"), "create") => {
             let ids: Vec<String> = args
@@ -299,12 +304,11 @@ async fn dispatch(
             outcome(
                 client
                     .citation_check_documents()
-                    .wait_until_ready(
+                    .wait_until_ready_with(
                         &a.required("document_id"),
-                        WaitParams {
-                            poll_interval: a.seconds("poll_interval", defaults.poll_interval),
-                            timeout: a.seconds("timeout", defaults.timeout),
-                        },
+                        WaitParams::default()
+                            .poll_interval(a.seconds("poll_interval", defaults.poll_interval))
+                            .timeout(a.seconds("timeout", defaults.timeout)),
                     )
                     .await,
             )

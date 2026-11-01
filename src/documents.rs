@@ -9,6 +9,7 @@ use crate::common::Credits;
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::params::require_text;
 use crate::response::Response;
 use crate::types::{DocumentErrorCode, DocumentStatus};
 use reqwest::Method;
@@ -104,10 +105,71 @@ impl UploadParams {
         }
     }
 
+    /// Reads a file from disk and guesses its name and media type.
+    ///
+    /// The file name is the last part of the path. The media type comes from the extension:
+    /// `pdf` is `application/pdf`, `docx` is the Word media type, `md` is `text/markdown` and `txt`
+    /// is `text/plain`. Any other extension is refused, because a wrong media type would only make
+    /// the server refuse the upload later. Use [`UploadParams::new`] for those.
+    ///
+    /// The read is synchronous (`std::fs::read`). It blocks the thread for the time the disk takes.
+    ///
+    /// ```no_run
+    /// use klaracase::UploadParams;
+    ///
+    /// # fn run() -> Result<(), klaracase::Error> {
+    /// let params = UploadParams::from_path("schriftsatz.pdf")?;
+    /// assert_eq!(params.content_type, "application/pdf");
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] when the file cannot be read or has an extension this function
+    /// does not know.
+    pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+        let path = path.as_ref();
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let content_type = match extension.as_str() {
+            "pdf" => "application/pdf",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "md" => "text/markdown",
+            "txt" => "text/plain",
+            _ => {
+                return Err(Error::client_validation(format!(
+                    "cannot guess the media type of `{}`: use a .pdf, .docx, .md or .txt file, or \
+                     build the upload with UploadParams::new",
+                    path.display()
+                )));
+            }
+        };
+        let filename = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let bytes = std::fs::read(path).map_err(|error| {
+            Error::client_validation(format!("cannot read `{}`: {error}", path.display()))
+        })?;
+        Ok(Self::new(bytes, filename, content_type))
+    }
+
     /// The file content.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Checks the shape of the input without any request: a file name that is not blank.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
+        require_text("filename", &self.filename)
     }
 }
 
@@ -121,8 +183,18 @@ impl std::fmt::Debug for UploadParams {
     }
 }
 
-/// Parameters of [`CitationCheckDocuments::wait_until_ready`].
+/// Parameters of [`CitationCheckDocuments::wait_until_ready_with`].
+///
+/// ```
+/// use std::time::Duration;
+/// use klaracase::WaitParams;
+///
+/// let params = WaitParams::default()
+///     .poll_interval(Duration::from_secs(1))
+///     .timeout(Duration::from_secs(30));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WaitParams {
     /// Time between polls. The default is 2 seconds.
     pub poll_interval: Duration,
@@ -133,11 +205,32 @@ pub struct WaitParams {
 impl Default for WaitParams {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(2),
-            timeout: Duration::from_secs(120),
+            poll_interval: DEFAULT_POLL_INTERVAL,
+            timeout: DEFAULT_WAIT_TIMEOUT,
         }
     }
 }
+
+impl WaitParams {
+    /// Sets the time between polls.
+    #[must_use]
+    pub fn poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.poll_interval = poll_interval;
+        self
+    }
+
+    /// Sets the total time to wait.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+/// The default time between polls of an upload.
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// The default total time to wait for an upload.
+const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The upload operations. Get it with [`Klaracase::citation_check_documents`].
 #[derive(Debug, Clone, Copy)]
@@ -160,22 +253,23 @@ impl CitationCheckDocuments<'_> {
     /// A 429 or 503 is retried. A dropped connection is not.
     ///
     /// ```no_run
-    /// use klaracase::{Klaracase, UploadParams, WaitParams};
+    /// use std::time::Duration;
+    /// use klaracase::{Klaracase, UploadParams};
     ///
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
-    /// let bytes = std::fs::read("schriftsatz.pdf").expect("read the file");
     /// let receipt = client
     ///     .citation_check_documents()
-    ///     .upload(UploadParams::new(bytes, "schriftsatz.pdf", "application/pdf"))
+    ///     .upload(UploadParams::from_path("schriftsatz.pdf")?)
     ///     .await?;
     /// let ready = client
     ///     .citation_check_documents()
-    ///     .wait_until_ready(&receipt.id, WaitParams::default())
+    ///     .wait_until_ready(&receipt.id, Duration::from_secs(120))
     ///     .await?;
     /// println!("{:?} credits quoted", ready.quoted_credits);
     /// # Ok(()) }
     /// ```
     pub async fn upload(&self, params: UploadParams) -> Result<Response<DocumentReceipt>, Error> {
+        self.client.checked(params.validate())?;
         Part::bytes(Vec::new())
             .mime_str(&params.content_type)
             .map_err(|_| {
@@ -206,13 +300,46 @@ impl CitationCheckDocuments<'_> {
         self.client.execute(Request::get(path, Query::new())).await
     }
 
+    /// Polls [`get`](Self::get) every 2 seconds until the upload is `ready`, for at most `timeout`.
+    ///
+    /// See [`wait_until_ready_with`](Self::wait_until_ready_with) for the rules.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use klaracase::Klaracase;
+    ///
+    /// # async fn run(client: Klaracase, id: String) -> Result<(), klaracase::Error> {
+    /// let ready = client
+    ///     .citation_check_documents()
+    ///     .wait_until_ready(&id, Duration::from_secs(60))
+    ///     .await?;
+    /// println!("{:?} credits quoted", ready.quoted_credits);
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::DocumentFailed`], [`Error::DocumentTimeout`], or any error a poll returns.
+    pub async fn wait_until_ready(
+        &self,
+        document_id: &str,
+        timeout: Duration,
+    ) -> Result<Response<DocumentReceipt>, Error> {
+        self.wait_until_ready_with(document_id, WaitParams::default().timeout(timeout))
+            .await
+    }
+
     /// Polls [`get`](Self::get) until the upload is `ready`.
     ///
     /// `uploaded`, `extracting` and `ocr_pending` keep the loop going. It returns the receipt when the
     /// status is `ready`. When extraction ends in `failed` it returns [`Error::DocumentFailed`]. When
     /// the timeout passes first it returns [`Error::DocumentTimeout`] with the last receipt. An error
     /// answer while polling returns the matching error at once.
-    pub async fn wait_until_ready(
+    ///
+    /// # Errors
+    ///
+    /// As described above.
+    pub async fn wait_until_ready_with(
         &self,
         document_id: &str,
         params: WaitParams,

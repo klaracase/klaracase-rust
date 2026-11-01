@@ -264,25 +264,108 @@ response_struct! {
 }
 
 impl Klaracase {
-    /// Searches statutes and decisions together. `GET /search`. One credit per distinct query and
-    /// filter set per month.
+    /// Starts a search over statutes and decisions together. `GET /search`. Chain setters, then
+    /// call [`send`](CrossTypeSearchRequest::send). One credit per distinct query and filter set per
+    /// month.
     ///
     /// ```no_run
-    /// use klaracase::{CrossTypeSearchParams, Klaracase};
+    /// use klaracase::Klaracase;
     ///
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
-    /// let found = client.search(CrossTypeSearchParams::new("Untreue Vermögensbetreuungspflicht")).await?;
+    /// let found = client.search("Untreue Vermögensbetreuungspflicht").limit(3).send().await?;
     /// for law in &found.sections.laws {
     ///     println!("{:?}", law.title);
     /// }
     /// # Ok(()) }
     /// ```
-    pub async fn search(
+    pub fn search(&self, query: impl Into<String>) -> CrossTypeSearchRequest<'_> {
+        CrossTypeSearchRequest {
+            client: self,
+            params: CrossTypeSearchParams::new(query),
+        }
+    }
+
+    /// Searches statutes and decisions together with ready [`CrossTypeSearchParams`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn search_with(
         &self,
         params: CrossTypeSearchParams,
     ) -> Result<Response<CrossTypeSearchResults>, Error> {
         self.checked(params.validate())?;
         self.execute(Request::get("/search", params.to_query()))
             .await
+    }
+}
+
+/// A cross-type search under construction. Get it with [`Klaracase::search`].
+///
+/// It has the setters of [`CrossTypeSearchParams`].
+#[derive(Debug, Clone)]
+#[must_use = "a search request does nothing until you call send"]
+pub struct CrossTypeSearchRequest<'a> {
+    client: &'a Klaracase,
+    params: CrossTypeSearchParams,
+}
+
+impl CrossTypeSearchRequest<'_> {
+    option_setters! {
+        delegate {
+            /// Narrows the laws section to one jurisdiction.
+            open(Jurisdiction) jurisdiction,
+            /// Sets the court name filter on the decisions section.
+            text court,
+            /// Sets the Gerichtsbarkeit filter.
+            open(Branch) branch,
+            /// Sets the earliest decision date, `YYYY-MM-DD`.
+            text date_from,
+            /// Sets the latest decision date, `YYYY-MM-DD`.
+            text date_to,
+            /// Sets the retrieval mode.
+            open(Mode) mode,
+            /// Restricts the decisions section to one document type.
+            open(DocumentType) document_type,
+            /// Restricts the decisions section to decisions that cite this norm.
+            text cited_norm,
+            /// Sets the maximum number of results per section.
+            plain(u32) limit,
+            /// Turns the register-term expansion on or off.
+            plain(bool) bridge,
+        }
+    }
+
+    /// Adds one statute to the `cited_statutes` filter.
+    pub fn cited_statute(mut self, statute: impl Into<Open<Statute>>) -> Self {
+        self.params = self.params.cited_statute(statute);
+        self
+    }
+
+    /// Replaces the `cited_statutes` filter.
+    pub fn cited_statutes<I>(mut self, statutes: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Open<Statute>>,
+    {
+        self.params = self.params.cited_statutes(statutes);
+        self
+    }
+
+    /// The parameters built so far.
+    #[must_use]
+    pub fn params(&self) -> &CrossTypeSearchParams {
+        &self.params
+    }
+
+    /// Sends the search.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn send(self) -> Result<Response<CrossTypeSearchResults>, Error> {
+        self.client.search_with(self.params).await
     }
 }

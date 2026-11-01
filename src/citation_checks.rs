@@ -8,6 +8,7 @@
 //! corpus. It does not prove that a quote or a legal proposition is correct.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,6 +16,7 @@ use serde_json::Value;
 use crate::client::{Klaracase, Request};
 use crate::common::Credits;
 use crate::common::slice_code_points;
+use crate::documents::{UploadParams, WaitParams};
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
 use crate::open::{Open, response_struct};
@@ -383,7 +385,38 @@ impl Klaracase {
     }
 }
 
-impl CitationChecks<'_> {
+impl<'a> CitationChecks<'a> {
+    /// Starts a check of a file on disk: upload, wait until the text is extracted, then check.
+    ///
+    /// Chain [`timeout`](CheckFileRequest::timeout) and
+    /// [`reference_date`](CheckFileRequest::reference_date) if you need them, then call
+    /// [`send`](CheckFileRequest::send). The upload and the wait are free. Only the check costs
+    /// credits, `max(2, ceil(chars / 5000))`, and it runs only when the upload is `ready`.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use klaracase::Klaracase;
+    ///
+    /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
+    /// let run = client
+    ///     .citation_checks()
+    ///     .check_file("schriftsatz.pdf")
+    ///     .timeout(Duration::from_secs(90))
+    ///     .reference_date("2024-05-01")
+    ///     .send()
+    ///     .await?;
+    /// println!("{} findings", run.findings.len());
+    /// # Ok(()) }
+    /// ```
+    pub fn check_file(&self, path: impl Into<std::path::PathBuf>) -> CheckFileRequest<'a> {
+        CheckFileRequest {
+            client: self.client,
+            path: path.into(),
+            wait: WaitParams::default(),
+            reference_date: None,
+        }
+    }
+
     /// Checks the citations of a text or of an uploaded document. `POST /citation-checks`.
     ///
     /// The call is synchronous: the answer is the finished run. It costs `max(2, ceil(chars / 5000))`
@@ -423,5 +456,61 @@ impl CitationChecks<'_> {
     pub async fn get(&self, run_id: &str) -> Result<Response<CitationCheckRun>, Error> {
         let path = format!("/citation-checks/{}", path_segment("run_id", run_id)?);
         self.client.execute(Request::get(path, Query::new())).await
+    }
+}
+
+/// A check of a file under construction. Get it with [`CitationChecks::check_file`].
+#[derive(Debug, Clone)]
+#[must_use = "a file check does nothing until you call send"]
+pub struct CheckFileRequest<'a> {
+    client: &'a Klaracase,
+    path: std::path::PathBuf,
+    wait: WaitParams,
+    reference_date: Option<String>,
+}
+
+impl CheckFileRequest<'_> {
+    /// Sets how long to wait for the text to be extracted. The default is 120 seconds.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.wait = self.wait.timeout(timeout);
+        self
+    }
+
+    /// Sets the time between polls while the text is extracted. The default is 2 seconds.
+    pub fn poll_interval(mut self, poll_interval: Duration) -> Self {
+        self.wait = self.wait.poll_interval(poll_interval);
+        self
+    }
+
+    /// Sets the document date (`YYYY-MM-DD`).
+    pub fn reference_date(mut self, reference_date: impl Into<String>) -> Self {
+        self.reference_date = Some(reference_date.into());
+        self
+    }
+
+    /// Reads the file, uploads it, waits until it is `ready` and checks it.
+    ///
+    /// The date and the file are checked before any request. If the wait ends in
+    /// [`Error::DocumentFailed`] or [`Error::DocumentTimeout`], no check runs and nothing is
+    /// charged. The upload stays on the server and expires after 48 hours if it is not used.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for a file that cannot be read or a bad date, then any error of
+    /// the three calls.
+    pub async fn send(self) -> Result<Response<CitationCheckRun>, Error> {
+        let mut params = CreateCitationCheckParams::from_document("pending");
+        params.reference_date = self.reference_date.clone();
+        self.client.checked(params.validate())?;
+        let upload = UploadParams::from_path(&self.path)?;
+
+        let documents = self.client.citation_check_documents();
+        let receipt = documents.upload(upload).await?;
+        let ready = documents
+            .wait_until_ready_with(&receipt.id, self.wait)
+            .await?;
+
+        params.document_id = Some(ready.id.clone());
+        self.client.citation_checks().create(params).await
     }
 }

@@ -3,7 +3,7 @@
 //! Run it with a real token: `KLARACASE_API_TOKEN=<token> cargo run --example search`.
 //! A search costs one credit.
 
-use klaracase::{Klaracase, SearchDecisionsParams};
+use klaracase::Klaracase;
 
 #[tokio::main]
 async fn main() -> Result<(), klaracase::Error> {
@@ -11,11 +11,10 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let found = client
         .decisions()
-        .search(
-            SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue")
-                .court("BGH")
-                .limit(5),
-        )
+        .search("Vermögensbetreuungspflicht Untreue")
+        .court("BGH")
+        .limit(5)
+        .send()
         .await?;
 
     for hit in &found.results {

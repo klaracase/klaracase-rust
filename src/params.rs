@@ -27,7 +27,6 @@ macro_rules! option_setters {
     };
     (@one delegate text $name:ident [ $(#[$meta:meta])* ]) => {
         $(#[$meta])*
-        #[must_use]
         pub fn $name(mut self, value: impl Into<String>) -> Self {
             self.params = self.params.$name(value);
             self
@@ -43,7 +42,6 @@ macro_rules! option_setters {
     };
     (@one delegate open($ty:ty) $name:ident [ $(#[$meta:meta])* ]) => {
         $(#[$meta])*
-        #[must_use]
         pub fn $name(mut self, value: impl Into<$crate::Open<$ty>>) -> Self {
             self.params = self.params.$name(value);
             self
@@ -59,7 +57,6 @@ macro_rules! option_setters {
     };
     (@one delegate plain($ty:ty) $name:ident [ $(#[$meta:meta])* ]) => {
         $(#[$meta])*
-        #[must_use]
         pub fn $name(mut self, value: $ty) -> Self {
             self.params = self.params.$name(value);
             self

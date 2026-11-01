@@ -28,7 +28,7 @@ Keep the token secret. Do not commit it. The client reads it from the argument o
 ## Quick start
 
 ```rust,no_run
-use klaracase::{Klaracase, SearchDecisionsParams};
+use klaracase::Klaracase;
 
 #[tokio::main]
 async fn main() -> Result<(), klaracase::Error> {
@@ -37,7 +37,9 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let found = client
         .decisions()
-        .search(SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue").court("BGH"))
+        .search("Vermögensbetreuungspflicht Untreue")
+        .court("BGH")
+        .send()
         .await?;
 
     for hit in &found.results {
@@ -97,7 +99,8 @@ You give either `text` or `document_id`, never both. If you give both or neither
 ### Check an uploaded file
 
 ```rust,no_run
-use klaracase::{CreateCitationCheckParams, Klaracase, UploadParams, WaitParams};
+use std::time::Duration;
+use klaracase::{CreateCitationCheckParams, Klaracase, UploadParams};
 
 #[tokio::main]
 async fn main() -> Result<(), klaracase::Error> {
@@ -110,7 +113,7 @@ async fn main() -> Result<(), klaracase::Error> {
         .await?;
     let ready = client
         .citation_check_documents()
-        .wait_until_ready(&receipt.id, WaitParams::default())
+        .wait_until_ready(&receipt.id, Duration::from_secs(120))
         .await?;
     println!("a check costs {:?} credits", ready.quoted_credits);
 
@@ -130,13 +133,13 @@ An upload accepts PDF, DOCX, Markdown and plain text up to 25 MB. It is free. `w
 One `Error` enum covers every failure. It is `#[non_exhaustive]`, so end a `match` with a catch-all arm.
 
 ```rust,no_run
-use klaracase::{Error, GetDecisionParams, Klaracase};
+use klaracase::{Error, Klaracase};
 
 #[tokio::main]
 async fn main() {
     let client = Klaracase::from_env().expect("token");
 
-    match client.decisions().get("1 StR 185/01", GetDecisionParams::default()).await {
+    match client.decisions().get("1 StR 185/01").await {
         Ok(decision) => println!("{:?} chars", decision.text_length),
         Err(Error::NotFound(problem)) => println!("no such decision: {}", problem.detail),
         Err(Error::InsufficientCredits { cost, balance, .. }) => {

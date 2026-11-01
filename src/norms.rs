@@ -197,14 +197,28 @@ impl Norms<'_> {
     /// as `§ 535 BGB` or `Art. 6 DSGVO`, up to 120 characters. One credit per norm per month.
     ///
     /// ```no_run
-    /// use klaracase::{GetNormParams, Klaracase};
+    /// use klaracase::Klaracase;
     ///
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
-    /// let norm = client.norms().get("Art. 6 DSGVO", GetNormParams::default()).await?;
+    /// let norm = client.norms().get("Art. 6 DSGVO").await?;
     /// println!("{:?}", norm.norm.as_ref().and_then(|n| n.text.as_deref()));
     /// # Ok(()) }
     /// ```
-    pub async fn get(
+    ///
+    /// # Errors
+    ///
+    /// Any [`Error`] the call returns.
+    pub async fn get(&self, reference: &str) -> Result<Response<Norm>, Error> {
+        self.get_with(reference, GetNormParams::default()).await
+    }
+
+    /// Reads a norm with ready [`GetNormParams`], for example to pick the jurisdiction when the
+    /// abbreviation is ambiguous.
+    ///
+    /// # Errors
+    ///
+    /// Any [`Error`] the call returns.
+    pub async fn get_with(
         &self,
         reference: &str,
         params: GetNormParams,

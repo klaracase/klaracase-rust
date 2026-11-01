@@ -43,13 +43,13 @@ async fn bad_input_sends_no_request() {
 
     let error = client
         .decisions()
-        .search(SearchDecisionsParams::new("   "))
+        .search_with(SearchDecisionsParams::new("   "))
         .await
         .unwrap_err();
     assert_refused(&error, "query");
 
     let error = client
-        .search(CrossTypeSearchParams::new(""))
+        .search_with(CrossTypeSearchParams::new(""))
         .await
         .unwrap_err();
     assert_refused(&error, "query");
@@ -63,13 +63,13 @@ async fn bad_input_sends_no_request() {
     ] {
         let error = client
             .decisions()
-            .search(SearchDecisionsParams::new("Untreue").date_from(bad))
+            .search_with(SearchDecisionsParams::new("Untreue").date_from(bad))
             .await
             .unwrap_err();
         assert_refused(&error, "date_from");
         let error = client
             .decisions()
-            .search(SearchDecisionsParams::new("Untreue").date_to(bad))
+            .search_with(SearchDecisionsParams::new("Untreue").date_to(bad))
             .await
             .unwrap_err();
         assert_refused(&error, "date_to");
@@ -77,7 +77,7 @@ async fn bad_input_sends_no_request() {
 
     let error = client
         .decisions()
-        .search(
+        .search_with(
             SearchDecisionsParams::new("Untreue")
                 .date_from("2020-01-02")
                 .date_to("2020-01-01"),
@@ -88,7 +88,7 @@ async fn bad_input_sends_no_request() {
 
     let error = client
         .decisions()
-        .get(
+        .get_with(
             "1 StR 185/01",
             GetDecisionParams::default().rn_from(9).rn_to(3),
         )
@@ -98,7 +98,7 @@ async fn bad_input_sends_no_request() {
 
     let error = client
         .decisions()
-        .get(
+        .get_with(
             "1 StR 185/01",
             GetDecisionParams::default().date("1.1.2020"),
         )
@@ -108,7 +108,7 @@ async fn bad_input_sends_no_request() {
 
     let error = client
         .decisions()
-        .citations("1 StR 185/01", CitationsParams::default().date("soon"))
+        .citations_with("1 StR 185/01", CitationsParams::default().date("soon"))
         .await
         .unwrap_err();
     assert_refused(&error, "date");
@@ -179,12 +179,12 @@ async fn numbers_and_lengths_the_server_owns_are_sent_as_given() {
     // A one-character query, a limit and a page far above the caps, and a long query.
     client
         .decisions()
-        .search(SearchDecisionsParams::new("x").limit(5_000).page(99))
+        .search_with(SearchDecisionsParams::new("x").limit(5_000).page(99))
         .await
         .expect("sent");
     client
         .decisions()
-        .search(SearchDecisionsParams::new("y".repeat(600)))
+        .search_with(SearchDecisionsParams::new("y".repeat(600)))
         .await
         .expect("sent");
 
@@ -205,7 +205,7 @@ async fn switching_client_validation_off_lets_the_server_judge() {
 
     client
         .decisions()
-        .search(
+        .search_with(
             SearchDecisionsParams::new("Untreue")
                 .date_from("2020-01-02")
                 .date_to("2020-01-01"),
@@ -221,7 +221,7 @@ async fn closed_lists_accept_typed_values_and_the_servers_own_spelling() {
 
     client
         .decisions()
-        .search(
+        .search_with(
             SearchDecisionsParams::new("Untreue")
                 .branch(Branch::Arbeit)
                 .mode("keyword")

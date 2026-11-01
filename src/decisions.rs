@@ -8,6 +8,7 @@ use crate::common::{Count, Credits, QueryExpansion, Snippet};
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::pager::{PageEnd, PageRequest, Pager};
 use crate::params::{check_date, check_date_range, invalid, option_setters, require_text};
 use crate::response::Response;
 use crate::types::{
@@ -631,26 +632,45 @@ impl Klaracase {
     }
 }
 
-impl Decisions<'_> {
-    /// Searches the court decisions. `GET /decisions/search`. One credit per distinct query and
-    /// filter set per month; paging and a repeat cost nothing more.
+/// The most pages a decision search serves.
+const SEARCH_PAGE_CAP: u32 = 10;
+/// The most pages a citation graph serves.
+const CITATIONS_PAGE_CAP: u32 = 20;
+
+impl<'a> Decisions<'a> {
+    /// Starts a search of the court decisions. `GET /decisions/search`. Chain setters, then call
+    /// [`send`](SearchRequest::send) or [`pages`](SearchRequest::pages).
+    ///
+    /// One credit per distinct query and filter set per month; paging and a repeat cost nothing more.
     ///
     /// ```no_run
-    /// use klaracase::{Klaracase, Mode, SearchDecisionsParams};
+    /// use klaracase::{Klaracase, Mode};
     ///
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
     /// let found = client
     ///     .decisions()
-    ///     .search(
-    ///         SearchDecisionsParams::new("Widerrufsrecht Fernabsatzvertrag")
-    ///             .mode(Mode::Hybrid)
-    ///             .bridge(false),
-    ///     )
+    ///     .search("Widerrufsrecht Fernabsatzvertrag")
+    ///     .mode(Mode::Hybrid)
+    ///     .bridge(false)
+    ///     .send()
     ///     .await?;
     /// println!("{} hits, status {}", found.results.len(), found.meta.status);
     /// # Ok(()) }
     /// ```
-    pub async fn search(
+    pub fn search(&self, query: impl Into<String>) -> SearchRequest<'a> {
+        SearchRequest {
+            client: self.client,
+            params: SearchDecisionsParams::new(query),
+        }
+    }
+
+    /// Searches the court decisions with a ready [`SearchDecisionsParams`]. `GET /decisions/search`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn search_with(
         &self,
         params: SearchDecisionsParams,
     ) -> Result<Response<DecisionSearchResults>, Error> {
@@ -664,17 +684,40 @@ impl Decisions<'_> {
     /// client encodes it as one path segment. One credit per decision per month.
     ///
     /// ```no_run
+    /// use klaracase::Klaracase;
+    ///
+    /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
+    /// let decision = client.decisions().get("1 StR 185/01").await?;
+    /// println!("{:?}", decision.full_text);
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Any [`Error`] the call returns.
+    pub async fn get(&self, id: &str) -> Result<Response<Decision>, Error> {
+        self.get_with(id, GetDecisionParams::default()).await
+    }
+
+    /// Reads one decision, or a slice of it. `GET /decisions/{id}`.
+    ///
+    /// ```no_run
     /// use klaracase::{GetDecisionParams, Klaracase};
     ///
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
     /// let decision = client
     ///     .decisions()
-    ///     .get("1 StR 185/01", GetDecisionParams::default().section("Gründe"))
+    ///     .get_with("1 StR 185/01", GetDecisionParams::default().section("Gründe").max_chars(4000))
     ///     .await?;
-    /// println!("{:?}", decision.full_text);
+    /// # let _ = decision;
     /// # Ok(()) }
     /// ```
-    pub async fn get(
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn get_with(
         &self,
         id: &str,
         params: GetDecisionParams,
@@ -686,9 +729,25 @@ impl Decisions<'_> {
             .await
     }
 
-    /// Lists the citations of one decision. `GET /decisions/{id}/citations`. Two credits per
-    /// decision, direction and depth per month; paging is free.
-    pub async fn citations(
+    /// Starts a read of the citations of one decision. `GET /decisions/{id}/citations`. Chain
+    /// setters, then call [`send`](CitationsRequest::send) or [`pages`](CitationsRequest::pages).
+    ///
+    /// Two credits per decision, direction and depth per month; paging is free.
+    pub fn citations(&self, id: impl Into<String>) -> CitationsRequest<'a> {
+        CitationsRequest {
+            client: self.client,
+            id: id.into(),
+            params: CitationsParams::default(),
+        }
+    }
+
+    /// Lists the citations of one decision with ready [`CitationsParams`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn citations_with(
         &self,
         id: &str,
         params: CitationsParams,
@@ -698,5 +757,192 @@ impl Decisions<'_> {
         self.client
             .execute(Request::get(path, params.to_query()))
             .await
+    }
+}
+
+/// A decision search under construction. Get it with [`Decisions::search`].
+///
+/// It has the setters of [`SearchDecisionsParams`].
+#[derive(Debug, Clone)]
+#[must_use = "a search request does nothing until you call send or pages"]
+pub struct SearchRequest<'a> {
+    client: &'a Klaracase,
+    params: SearchDecisionsParams,
+}
+
+impl SearchRequest<'_> {
+    option_setters! {
+        delegate {
+            /// Sets the court name filter.
+            text court,
+            /// Sets the Gerichtsbarkeit filter.
+            open(Branch) branch,
+            /// Restricts the search to one document type.
+            open(DocumentType) document_type,
+            /// Restricts the search to decisions that cite this norm, for example `§ 906 BGB`.
+            text cited_norm,
+            /// Sets the earliest decision date, `YYYY-MM-DD`.
+            text date_from,
+            /// Sets the latest decision date, `YYYY-MM-DD`.
+            text date_to,
+            /// Sets the retrieval mode.
+            open(Mode) mode,
+            /// Sets the maximum number of results.
+            plain(u32) limit,
+            /// Sets the 1-based page.
+            plain(u32) page,
+            /// Turns the register-term expansion on or off.
+            plain(bool) bridge,
+        }
+    }
+
+    /// Adds one statute to the `cited_statutes` filter.
+    pub fn cited_statute(mut self, statute: impl Into<Open<Statute>>) -> Self {
+        self.params = self.params.cited_statute(statute);
+        self
+    }
+
+    /// Replaces the `cited_statutes` filter.
+    pub fn cited_statutes<I>(mut self, statutes: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Open<Statute>>,
+    {
+        self.params = self.params.cited_statutes(statutes);
+        self
+    }
+
+    /// The parameters built so far.
+    #[must_use]
+    pub fn params(&self) -> &SearchDecisionsParams {
+        &self.params
+    }
+
+    /// Sends the search.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn send(self) -> Result<Response<DecisionSearchResults>, Error> {
+        self.client.decisions().search_with(self.params).await
+    }
+
+    /// Walks the pages of this search, at most `max_pages` of them, starting at the `page` set (the
+    /// first page by default).
+    ///
+    /// `max_pages` is required and is clamped to the 10 pages the server serves. The walk stops at
+    /// the first empty page. The search costs one credit per distinct query and filter set per month;
+    /// its further pages cost nothing more, but each is a request against the rate limit. See
+    /// [`Pager`].
+    pub fn pages(self, max_pages: u32) -> Pager<DecisionSearchResults> {
+        let first = self.params.page.unwrap_or(1);
+        let params = self.params;
+        let client = self.client.clone();
+        let request: PageRequest = Box::new(move |page| {
+            let params = params.clone().page(page);
+            client.checked(params.validate())?;
+            Ok(Request::get("/decisions/search", params.to_query()))
+        });
+        Pager::new(
+            self.client.clone(),
+            request,
+            |page: &DecisionSearchResults| {
+                if page.results.is_empty() {
+                    PageEnd::Empty
+                } else {
+                    PageEnd::More
+                }
+            },
+            first,
+            max_pages,
+            SEARCH_PAGE_CAP,
+        )
+    }
+}
+
+/// A citation graph read under construction. Get it with [`Decisions::citations`].
+///
+/// It has the setters of [`CitationsParams`].
+#[derive(Debug, Clone)]
+#[must_use = "a citations request does nothing until you call send or pages"]
+pub struct CitationsRequest<'a> {
+    client: &'a Klaracase,
+    id: String,
+    params: CitationsParams,
+}
+
+impl CitationsRequest<'_> {
+    option_setters! {
+        delegate {
+            /// Sets which neighbours to list.
+            open(Direction) direction,
+            /// Sets how far to follow citations.
+            open(Depth) depth,
+            /// Sets the court short form that disambiguates an Aktenzeichen.
+            text court,
+            /// Sets the decision date (`YYYY-MM-DD`) that disambiguates an Aktenzeichen.
+            text date,
+            /// Sets the 1-based page.
+            plain(u32) page,
+        }
+    }
+
+    /// Sends the read.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] for input of the wrong shape, before any request, or any error
+    /// the call returns.
+    pub async fn send(self) -> Result<Response<CitationGraph>, Error> {
+        self.client
+            .decisions()
+            .citations_with(&self.id, self.params)
+            .await
+    }
+
+    /// Walks the pages of this graph, at most `max_pages` of them, starting at the `page` set (the
+    /// first page by default).
+    ///
+    /// `max_pages` is required and is clamped to the 20 pages the server serves. At depth 2 the
+    /// server serves page 1 only, so the walk is one page. The walk stops at the first empty page and
+    /// after a page that says no more neighbours follow. The graph costs two credits per decision,
+    /// direction and depth per month and its pages are free, but each is a request against the rate
+    /// limit. See [`Pager`].
+    pub fn pages(self, max_pages: u32) -> Pager<CitationGraph> {
+        let first = self.params.page.unwrap_or(1);
+        let depth_two = self.params.depth.as_ref().is_some_and(|d| *d == Depth::Two);
+        let max_pages = if depth_two {
+            max_pages.min(1)
+        } else {
+            max_pages
+        };
+        let params = self.params;
+        let client = self.client.clone();
+        let id = self.id;
+        let request: PageRequest = Box::new(move |page| {
+            let params = params.clone().page(page);
+            client.checked(params.validate())?;
+            let path = format!("/decisions/{}/citations", path_segment("id", &id)?);
+            Ok(Request::get(path, params.to_query()))
+        });
+        Pager::new(
+            self.client.clone(),
+            request,
+            |graph: &CitationGraph| {
+                let empty = graph.references.is_empty() && graph.referenced_by.is_empty();
+                let more = graph.pagination.as_ref().map(|p| {
+                    p.has_more_references == Some(true) || p.has_more_referenced_by == Some(true)
+                });
+                match (empty, more) {
+                    (true, _) => PageEnd::Empty,
+                    (false, Some(false)) => PageEnd::Last,
+                    (false, _) => PageEnd::More,
+                }
+            },
+            first,
+            max_pages,
+            CITATIONS_PAGE_CAP,
+        )
     }
 }

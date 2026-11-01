@@ -37,13 +37,15 @@ type DeprecationHook = Arc<dyn Fn(DeprecationNotice) + Send + Sync>;
 /// once and reuse it.
 ///
 /// ```no_run
-/// use klaracase::{Klaracase, SearchDecisionsParams};
+/// use klaracase::Klaracase;
 ///
 /// # async fn run() -> Result<(), klaracase::Error> {
 /// let client = Klaracase::new("klc_your_token_here")?;
 /// let found = client
 ///     .decisions()
-///     .search(SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue").court("BGH"))
+///     .search("Vermögensbetreuungspflicht Untreue")
+///     .court("BGH")
+///     .send()
 ///     .await?;
 /// for hit in &found.results {
 ///     println!("{:?} {:?}", hit.aktenzeichen, hit.title);

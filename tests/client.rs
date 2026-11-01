@@ -3,54 +3,20 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use klaracase::{
-    Clock, CreateDatapackageParams, DocumentStatus, Error, Klaracase, Open, SearchDecisionsParams,
-    SleepFuture, Sleeper, WaitParams,
+    CreateDatapackageParams, DocumentStatus, Error, Klaracase, Open, SearchDecisionsParams,
+    WaitParams,
 };
 use serde_json::Value;
 
-use common::{MockResponse, MockServer};
+use common::{FakeTime, MockResponse, MockServer};
 
 const SEARCH_BODY: &str = include_str!("fixtures/examples/decisions.search.json");
 const EXTRACTING: &str = include_str!("fixtures/conformance/bodies/documents.extracting.json");
 const DOCUMENT_ID: &str = "0193b0c6-3c4d-7e5f-8a60-7c8d9e0f1a2b";
-
-/// A clock that only moves when the sleeper sleeps.
-#[derive(Clone)]
-struct FakeTime {
-    base: Instant,
-    elapsed_millis: Arc<AtomicU64>,
-    sleeps: Arc<Mutex<Vec<Duration>>>,
-}
-
-impl FakeTime {
-    fn new() -> Self {
-        Self {
-            base: Instant::now(),
-            elapsed_millis: Arc::default(),
-            sleeps: Arc::default(),
-        }
-    }
-}
-
-impl Clock for FakeTime {
-    fn now(&self) -> Instant {
-        self.base + Duration::from_millis(self.elapsed_millis.load(Ordering::SeqCst))
-    }
-}
-
-impl Sleeper for FakeTime {
-    fn sleep(&self, duration: Duration) -> SleepFuture<'_> {
-        self.elapsed_millis
-            .fetch_add(duration.as_millis() as u64, Ordering::SeqCst);
-        self.sleeps.lock().unwrap().push(duration);
-        Box::pin(async {})
-    }
-}
 
 fn client_for(server: &MockServer, time: &FakeTime) -> Klaracase {
     Klaracase::builder()
@@ -70,12 +36,11 @@ async fn wait_until_ready_times_out_on_the_injected_clock() {
 
     let error = client
         .citation_check_documents()
-        .wait_until_ready(
+        .wait_until_ready_with(
             DOCUMENT_ID,
-            WaitParams {
-                poll_interval: Duration::from_secs(2),
-                timeout: Duration::from_secs(10),
-            },
+            WaitParams::default()
+                .poll_interval(Duration::from_secs(2))
+                .timeout(Duration::from_secs(10)),
         )
         .await
         .unwrap_err();
@@ -100,7 +65,7 @@ async fn zero_and_false_are_sent_and_none_is_not() {
 
     client
         .decisions()
-        .search(
+        .search_with(
             SearchDecisionsParams::new("Untreue")
                 .limit(0)
                 .page(0)
@@ -165,7 +130,7 @@ async fn an_injected_http_client_is_used() {
 
     client
         .decisions()
-        .search(SearchDecisionsParams::new("Untreue"))
+        .search_with(SearchDecisionsParams::new("Untreue"))
         .await
         .expect("search");
 
@@ -185,7 +150,7 @@ async fn a_2xx_answer_that_is_not_json_is_a_decode_error() {
 
     let error = client
         .decisions()
-        .search(SearchDecisionsParams::new("Untreue"))
+        .search_with(SearchDecisionsParams::new("Untreue"))
         .await
         .unwrap_err();
 
@@ -205,7 +170,7 @@ async fn a_decode_error_keeps_the_start_of_the_paid_answer() {
 
     let error = client
         .decisions()
-        .search(SearchDecisionsParams::new("Untreue"))
+        .search_with(SearchDecisionsParams::new("Untreue"))
         .await
         .unwrap_err();
 
@@ -227,11 +192,7 @@ async fn path_parameters_that_a_url_parser_would_collapse_are_refused_before_a_r
     let client = client_for(&server, &FakeTime::new());
 
     for bad in ["", ".", ".."] {
-        let error = client
-            .decisions()
-            .get(bad, klaracase::GetDecisionParams::default())
-            .await
-            .unwrap_err();
+        let error = client.decisions().get(bad).await.unwrap_err();
         assert_eq!(error.code(), Some("client_validation"), "{bad:?}");
     }
     assert!(server.requests().is_empty());
@@ -245,7 +206,7 @@ async fn error_accessors_expose_the_problem() {
 
     let error = client
         .decisions()
-        .search(SearchDecisionsParams::new("Untreue"))
+        .search_with(SearchDecisionsParams::new("Untreue"))
         .await
         .unwrap_err();
 
@@ -270,7 +231,7 @@ async fn the_token_never_appears_in_an_error_message() {
 
     let error = client
         .decisions()
-        .search(SearchDecisionsParams::new("Untreue"))
+        .search_with(SearchDecisionsParams::new("Untreue"))
         .await
         .unwrap_err();
 
