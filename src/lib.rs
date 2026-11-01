@@ -6,21 +6,32 @@
 
 mod client;
 mod common;
+mod decisions;
 mod deprecation;
 mod documents;
 mod encode;
 mod error;
 mod response;
 mod retry;
+mod search;
 mod types;
 
 pub use client::{ClientBuilder, Klaracase};
 pub use common::{Count, Credits, Snippet};
+pub use decisions::{
+    AvailableRange, CitationEdge, CitationGraph, CitationPagination, CitationSource,
+    CitationsParams, CorpusRef, Decision, DecisionMetadata, DecisionSearchResults, Decisions,
+    GetDecisionParams, SearchDecisionsParams, SearchHit,
+};
 pub use deprecation::{DeprecationNotice, reset_deprecation_guard};
 pub use documents::{DocumentReceipt, DocumentStatus};
 pub use error::{Error, Problem};
 pub use response::{Extras, Response, ResponseMeta};
 pub use retry::{Clock, SleepFuture, Sleeper, SystemClock};
+pub use search::{
+    CrossTypeSearchParams, CrossTypeSearchResults, SearchSections, SectionTotals,
+    SectionTotalsBySection,
+};
 pub use types::*;
 
 #[cfg(feature = "tokio")]
