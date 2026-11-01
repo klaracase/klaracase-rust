@@ -7,6 +7,7 @@
 mod citation_checks;
 mod client;
 mod common;
+mod corpus;
 mod datapackages;
 mod decisions;
 mod deprecation;
@@ -25,6 +26,9 @@ pub use citation_checks::{
 };
 pub use client::{ClientBuilder, Klaracase};
 pub use common::{Count, Credits, Snippet};
+pub use corpus::{
+    BranchCoverage, Corpus, CorpusCoverage, CourtCoverage, CoverageParams, Facets, FacetsParams,
+};
 pub use datapackages::{CreateDatapackageParams, Datapackage, Datapackages, PackageDecision};
 pub use decisions::{
     AvailableRange, CitationEdge, CitationGraph, CitationPagination, CitationSource,
