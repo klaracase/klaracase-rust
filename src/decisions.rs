@@ -1,5 +1,6 @@
 //! Decisions: search, read and citation graph.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::{Klaracase, Request};
@@ -7,6 +8,7 @@ use crate::common::{Count, Credits, QueryExpansion, Snippet};
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::params::{check_date, check_date_range, invalid, option_setters, require_text};
 use crate::response::Response;
 use crate::types::{
     ArtifactType, Branch, Confidence, Depth, Direction, DocumentType, Jurisdiction, Mode,
@@ -15,33 +17,64 @@ use crate::types::{
 
 /// Parameters of [`Decisions::search`].
 ///
-/// Build it with a struct literal and `..Default::default()`, or with [`SearchDecisionsParams::new`].
-/// A `None` field is not sent. `Some(false)` and `Some(0)` are sent.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Start with [`SearchDecisionsParams::new`] and chain setters. A field you do not set is not sent;
+/// `limit(0)` and `bridge(false)` are values and are sent. The struct is `#[non_exhaustive]`, so a
+/// parameter added in a later release does not break your code.
+///
+/// Setters that take a closed list accept the typed value (`Branch::Verwaltung`) or the server's own
+/// spelling (`"verwaltung"`). The string form is the escape hatch for a value this crate does not
+/// know yet.
+///
+/// ```
+/// use klaracase::{Branch, Mode, SearchDecisionsParams, Statute};
+///
+/// let params = SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue")
+///     .court("BGH")
+///     .branch(Branch::Ordentlich)
+///     .cited_statute(Statute::StGB)
+///     .date_from("2015-01-01")
+///     .mode(Mode::Hybrid)
+///     .limit(5);
+/// assert!(params.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct SearchDecisionsParams {
-    /// German legal-concept phrasing, 2 to 500 characters. Required.
+    /// German legal-concept phrasing. The server requires 2 to 500 characters. Required.
     pub query: String,
     /// Court name, as listed by `corpus().facets(FacetField::CourtName, ..)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub court: Option<String>,
     /// The Gerichtsbarkeit of the deciding court.
-    pub branch: Option<Branch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<Open<Branch>>,
     /// One decision document type.
-    pub document_type: Option<DocumentType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_type: Option<Open<DocumentType>>,
     /// Decisions whose Normenkette cites this norm, for example `§ 906 BGB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cited_norm: Option<String>,
     /// Any section of these statutes. An empty list is not sent.
-    pub cited_statutes: Vec<Statute>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cited_statutes: Vec<Open<Statute>>,
     /// Earliest decision date, `YYYY-MM-DD`, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_from: Option<String>,
     /// Latest decision date, `YYYY-MM-DD`, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_to: Option<String>,
     /// Retrieval mode. The server default is hybrid.
-    pub mode: Option<Mode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Open<Mode>>,
     /// Maximum results. The server caps it at 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     /// 1-based page, up to 10.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<u32>,
     /// Whether the server may add curated register terms to the query. The server default is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<bool>,
 }
 
@@ -51,8 +84,77 @@ impl SearchDecisionsParams {
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             query: query.into(),
-            ..Self::default()
+            court: None,
+            branch: None,
+            document_type: None,
+            cited_norm: None,
+            cited_statutes: Vec::new(),
+            date_from: None,
+            date_to: None,
+            mode: None,
+            limit: None,
+            page: None,
+            bridge: None,
         }
+    }
+
+    option_setters! {
+        direct {
+            /// Sets the court name filter.
+            text court,
+            /// Sets the Gerichtsbarkeit filter.
+            open(Branch) branch,
+            /// Restricts the search to one document type.
+            open(DocumentType) document_type,
+            /// Restricts the search to decisions that cite this norm, for example `§ 906 BGB`.
+            text cited_norm,
+            /// Sets the earliest decision date, `YYYY-MM-DD`.
+            text date_from,
+            /// Sets the latest decision date, `YYYY-MM-DD`.
+            text date_to,
+            /// Sets the retrieval mode.
+            open(Mode) mode,
+            /// Sets the maximum number of results.
+            plain(u32) limit,
+            /// Sets the 1-based page.
+            plain(u32) page,
+            /// Turns the register-term expansion on or off.
+            plain(bool) bridge,
+        }
+    }
+
+    /// Adds one statute to the `cited_statutes` filter.
+    #[must_use]
+    pub fn cited_statute(mut self, statute: impl Into<Open<Statute>>) -> Self {
+        self.cited_statutes.push(statute.into());
+        self
+    }
+
+    /// Replaces the `cited_statutes` filter.
+    #[must_use]
+    pub fn cited_statutes<I>(mut self, statutes: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Open<Statute>>,
+    {
+        self.cited_statutes = statutes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Checks the shape of the input without any request.
+    ///
+    /// The client calls this before it sends. It refuses a blank query, a date that is not
+    /// `YYYY-MM-DD` and `date_from` after `date_to`. It never checks a number the server owns, such as
+    /// a length or a cap.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
+        require_text("query", &self.query)?;
+        check_date("date_from", self.date_from.as_deref())?;
+        check_date("date_to", self.date_to.as_deref())?;
+        check_date_range(self.date_from.as_deref(), self.date_to.as_deref())
     }
 
     pub(crate) fn to_query(&self) -> Query {
@@ -148,24 +250,72 @@ response_struct! {
     }
 }
 
-/// Parameters of [`Decisions::get`].
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Parameters of [`Decisions::get`] and [`Decisions::get_with`].
+///
+/// ```
+/// use klaracase::GetDecisionParams;
+///
+/// let params = GetDecisionParams::default().section("Gründe").max_chars(4000);
+/// assert!(params.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct GetDecisionParams {
     /// Maximum characters of text. The server default is 40,000 and the minimum is 500.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_chars: Option<u32>,
     /// First Randnummer to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rn_from: Option<u32>,
     /// Last Randnummer to return, inclusive.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rn_to: Option<u32>,
     /// One named section: `Tenor`, `Leitsatz`, `Tatbestand` or `Gründe`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
     /// Court short form that disambiguates an Aktenzeichen.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub court: Option<String>,
     /// Decision date (`YYYY-MM-DD`) that disambiguates an Aktenzeichen.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
 }
 
 impl GetDecisionParams {
+    option_setters! {
+        direct {
+            /// Caps the characters of text returned.
+            plain(u32) max_chars,
+            /// Sets the first Randnummer to return.
+            plain(u32) rn_from,
+            /// Sets the last Randnummer to return, inclusive.
+            plain(u32) rn_to,
+            /// Selects one named section.
+            text section,
+            /// Sets the court short form that disambiguates an Aktenzeichen.
+            text court,
+            /// Sets the decision date (`YYYY-MM-DD`) that disambiguates an Aktenzeichen.
+            text date,
+        }
+    }
+
+    /// Checks the shape of the input without any request: `date` is `YYYY-MM-DD` and `rn_from` is
+    /// not above `rn_to`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
+        check_date("date", self.date.as_deref())?;
+        if let (Some(from), Some(to)) = (self.rn_from, self.rn_to) {
+            if from > to {
+                return Err(invalid("`rn_from` must not be above `rn_to`"));
+            }
+        }
+        Ok(())
+    }
+
     fn to_query(&self) -> Query {
         let mut query = Query::new();
         query.push_opt("max_chars", &self.max_chars);
@@ -269,23 +419,61 @@ response_struct! {
     }
 }
 
-/// Parameters of [`Decisions::citations`].
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Parameters of [`Decisions::citations`] and [`Decisions::citations_with`].
+///
+/// ```
+/// use klaracase::{CitationsParams, Direction};
+///
+/// let params = CitationsParams::default().direction(Direction::Incoming).page(2);
+/// assert!(params.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CitationsParams {
     /// Which neighbours to list. The server default is both.
-    pub direction: Option<Direction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Open<Direction>>,
     /// How far to follow. The server default is one hop.
-    pub depth: Option<Depth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<Open<Depth>>,
     /// Court short form that disambiguates an Aktenzeichen.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub court: Option<String>,
     /// Decision date (`YYYY-MM-DD`) that disambiguates an Aktenzeichen.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     /// 1-based page, up to 20. Defined at depth 1 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<u32>,
 }
 
 impl CitationsParams {
-    fn to_query(&self) -> Query {
+    option_setters! {
+        direct {
+            /// Sets which neighbours to list.
+            open(Direction) direction,
+            /// Sets how far to follow citations.
+            open(Depth) depth,
+            /// Sets the court short form that disambiguates an Aktenzeichen.
+            text court,
+            /// Sets the decision date (`YYYY-MM-DD`) that disambiguates an Aktenzeichen.
+            text date,
+            /// Sets the 1-based page.
+            plain(u32) page,
+        }
+    }
+
+    /// Checks the shape of the input without any request: `date` is `YYYY-MM-DD`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
+        check_date("date", self.date.as_deref())
+    }
+
+    pub(crate) fn to_query(&self) -> Query {
         let mut query = Query::new();
         query.push_opt("direction", &self.direction);
         query.push_opt("depth", &self.depth);
@@ -453,12 +641,11 @@ impl Decisions<'_> {
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
     /// let found = client
     ///     .decisions()
-    ///     .search(SearchDecisionsParams {
-    ///         query: "Widerrufsrecht Fernabsatzvertrag".into(),
-    ///         mode: Some(Mode::Hybrid),
-    ///         bridge: Some(false),
-    ///         ..Default::default()
-    ///     })
+    ///     .search(
+    ///         SearchDecisionsParams::new("Widerrufsrecht Fernabsatzvertrag")
+    ///             .mode(Mode::Hybrid)
+    ///             .bridge(false),
+    ///     )
     ///     .await?;
     /// println!("{} hits, status {}", found.results.len(), found.meta.status);
     /// # Ok(()) }
@@ -467,6 +654,7 @@ impl Decisions<'_> {
         &self,
         params: SearchDecisionsParams,
     ) -> Result<Response<DecisionSearchResults>, Error> {
+        self.client.checked(params.validate())?;
         self.client
             .execute(Request::get("/decisions/search", params.to_query()))
             .await
@@ -481,10 +669,7 @@ impl Decisions<'_> {
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
     /// let decision = client
     ///     .decisions()
-    ///     .get(
-    ///         "1 StR 185/01",
-    ///         GetDecisionParams { section: Some("Gründe".into()), ..Default::default() },
-    ///     )
+    ///     .get("1 StR 185/01", GetDecisionParams::default().section("Gründe"))
     ///     .await?;
     /// println!("{:?}", decision.full_text);
     /// # Ok(()) }
@@ -494,6 +679,7 @@ impl Decisions<'_> {
         id: &str,
         params: GetDecisionParams,
     ) -> Result<Response<Decision>, Error> {
+        self.client.checked(params.validate())?;
         let path = format!("/decisions/{}", path_segment("id", id)?);
         self.client
             .execute(Request::get(path, params.to_query()))
@@ -507,6 +693,7 @@ impl Decisions<'_> {
         id: &str,
         params: CitationsParams,
     ) -> Result<Response<CitationGraph>, Error> {
+        self.client.checked(params.validate())?;
         let path = format!("/decisions/{}/citations", path_segment("id", id)?);
         self.client
             .execute(Request::get(path, params.to_query()))

@@ -27,10 +27,9 @@ pub(crate) fn encode(value: &str) -> String {
 /// the request would reach another endpoint.
 pub(crate) fn path_segment(name: &str, value: &str) -> Result<String, Error> {
     if value.is_empty() || value == "." || value == ".." {
-        return Err(Error::config(
-            "client_validation",
-            format!("the path parameter `{name}` must not be empty, `.` or `..`"),
-        ));
+        return Err(Error::client_validation(format!(
+            "the path parameter `{name}` must not be empty, `.` or `..`"
+        )));
     }
     Ok(encode(value))
 }

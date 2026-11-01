@@ -100,13 +100,12 @@ async fn zero_and_false_are_sent_and_none_is_not() {
 
     client
         .decisions()
-        .search(SearchDecisionsParams {
-            query: "Untreue".into(),
-            limit: Some(0),
-            page: Some(0),
-            bridge: Some(false),
-            ..Default::default()
-        })
+        .search(
+            SearchDecisionsParams::new("Untreue")
+                .limit(0)
+                .page(0)
+                .bridge(false),
+        )
         .await
         .expect("search");
 
@@ -132,10 +131,7 @@ async fn datapackage_body_holds_only_what_was_set() {
 
     client
         .datapackages()
-        .create(CreateDatapackageParams {
-            full_text: Some(false),
-            ..CreateDatapackageParams::new(["1 StR 185/01"])
-        })
+        .create(CreateDatapackageParams::new(["1 StR 185/01"]).full_text(false))
         .await
         .expect("create");
 

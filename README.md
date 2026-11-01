@@ -37,11 +37,7 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let found = client
         .decisions()
-        .search(SearchDecisionsParams {
-            query: "Vermögensbetreuungspflicht Untreue".into(),
-            court: Some("BGH".into()),
-            ..Default::default()
-        })
+        .search(SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue").court("BGH"))
         .await?;
 
     for hit in &found.results {
@@ -52,7 +48,7 @@ async fn main() -> Result<(), klaracase::Error> {
 }
 ```
 
-Every optional parameter is an `Option`. `None` is not sent. `Some(false)` and `Some(0)` are sent. Use `..Default::default()` so a new parameter in a later release does not break your code.
+Parameter structs are built with `new(...)` and chained setters. A parameter you do not set is not sent. `limit(0)` and `bridge(false)` are values and are sent. Every parameter struct is `#[non_exhaustive]`, so a new parameter in a later release does not break your code.
 
 A response dereferences to its typed body, so `found.results` works. `found.meta` holds the HTTP status, the API release and the call duration. `found.credits` says what the call cost. Keys the crate does not model stay in the `extra` map of the struct that held them. `found.raw()` returns the whole answer as `serde_json::Value`, as the server sent it.
 
@@ -69,7 +65,7 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let run = client
         .citation_checks()
-        .create(CreateCitationCheckParams::from_text(text).with_reference_date("2024-05-01"))
+        .create(CreateCitationCheckParams::from_text(text).reference_date("2024-05-01"))
         .await?;
 
     for finding in &run.findings {
@@ -96,7 +92,7 @@ Read the verdicts with care:
 
 Offsets in a finding are Unicode codepoint offsets into the exact string you sent. They are not byte offsets.
 
-You give either `text` or `document_id`, never both. If you give both or neither, the call fails on the client with `Error::Configuration` (code `client_validation`) before any request.
+You give either `text` or `document_id`, never both. If you give both or neither, the call fails on the client with `Error::ClientValidation` (code `client_validation`) before any request.
 
 ### Check an uploaded file
 
@@ -171,7 +167,8 @@ async fn main() {
 | `Api` | any other status, and any error body that is not a problem |
 | `Transport`, `Timeout` | no answer came |
 | `Decode` | a 2xx answer that is not the expected JSON |
-| `Configuration { code, message }` | a mistake found before any request |
+| `Configuration { code, message }` | a mistake in the client setup, found before any request |
+| `ClientValidation { code, message }` | a mistake in the arguments of a call, found before any request |
 | `DocumentFailed`, `DocumentTimeout` | `wait_until_ready` |
 
 The API answers errors as RFC 9457 `application/problem+json`. `Error::problem()` returns the `Problem` with `type_`, `title`, `status`, `detail`, `code`, `api_release` and `extra`. `extra` holds every other member of the body. `Error::code()` returns the machine code. The HTTP status decides the variant.

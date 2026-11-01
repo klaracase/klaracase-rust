@@ -1,5 +1,6 @@
 //! Statute norms: `GET /norms/{reference}`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::client::{Klaracase, Request};
@@ -7,17 +8,34 @@ use crate::common::Credits;
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::params::option_setters;
 use crate::response::Response;
 use crate::types::{Jurisdiction, Lifecycle};
 
-/// Parameters of [`Norms::get`].
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Parameters of [`Norms::get`] and [`Norms::get_with`].
+///
+/// ```
+/// use klaracase::{GetNormParams, Jurisdiction};
+///
+/// let params = GetNormParams::default().jurisdiction(Jurisdiction::Eu);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct GetNormParams {
     /// `DE` or `EU`. Read only when the abbreviation is ambiguous.
-    pub jurisdiction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<Open<Jurisdiction>>,
 }
 
 impl GetNormParams {
+    option_setters! {
+        direct {
+            /// Picks the jurisdiction when the abbreviation is ambiguous.
+            open(Jurisdiction) jurisdiction,
+        }
+    }
+
     fn to_query(&self) -> Query {
         let mut query = Query::new();
         query.push_opt("jurisdiction", &self.jurisdiction);

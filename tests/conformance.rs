@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use klaracase::{
     CitationsParams, Clock, CoverageParams, CreateCitationCheckParams, CreateDatapackageParams,
-    CrossTypeSearchParams, DeprecationNotice, Depth, Direction, Error, Extras, FacetField,
-    FacetType, FacetsParams, GetDecisionParams, GetNormParams, Klaracase, Response,
-    SearchDecisionsParams, SleepFuture, Sleeper, Statute, UploadParams, WaitParams,
+    CrossTypeSearchParams, DeprecationNotice, Depth, Error, Extras, FacetField, FacetsParams,
+    GetDecisionParams, GetNormParams, Klaracase, Response, SearchDecisionsParams, SleepFuture,
+    Sleeper, Statute, UploadParams, WaitParams,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -145,6 +145,24 @@ impl Args<'_> {
     }
 }
 
+/// Applies the optional arguments of a case to a params value. Each line reads one argument and
+/// calls the matching builder method when the case passes it.
+macro_rules! apply {
+    ($params:expr, $a:expr, { $($key:literal => $method:ident ($kind:ident)),* $(,)? }) => {{
+        let mut params = $params;
+        $(
+            if let Some(value) = apply!(@read $a, $key, $kind) {
+                params = params.$method(value);
+            }
+        )*
+        params
+    }};
+    (@read $a:expr, $key:literal, text) => { $a.string($key) };
+    (@read $a:expr, $key:literal, number) => { $a.number($key) };
+    (@read $a:expr, $key:literal, boolean) => { $a.boolean($key) };
+    (@read $a:expr, $key:literal, word) => { $a.string($key) };
+}
+
 async fn dispatch(
     client: &Klaracase,
     group: Option<&str>,
@@ -153,114 +171,102 @@ async fn dispatch(
 ) -> Outcome {
     let a = Args(args);
     match (group, method) {
-        (Some("decisions"), "search") => outcome(
-            client
-                .decisions()
-                .search(SearchDecisionsParams {
-                    query: a.required("query"),
-                    court: a.string("court"),
-                    branch: a.parsed("branch"),
-                    document_type: a.parsed("document_type"),
-                    cited_norm: a.string("cited_norm"),
-                    cited_statutes: a.list::<Statute>("cited_statutes"),
-                    date_from: a.string("date_from"),
-                    date_to: a.string("date_to"),
-                    mode: a.parsed("mode"),
-                    limit: a.number("limit"),
-                    page: a.number("page"),
-                    bridge: a.boolean("bridge"),
-                })
-                .await,
-        ),
-        (None, "search") => outcome(
-            client
-                .search(CrossTypeSearchParams {
-                    query: a.required("query"),
-                    jurisdiction: a.string("jurisdiction"),
-                    court: a.string("court"),
-                    branch: a.parsed("branch"),
-                    date_from: a.string("date_from"),
-                    date_to: a.string("date_to"),
-                    mode: a.parsed("mode"),
-                    document_type: a.parsed("document_type"),
-                    cited_norm: a.string("cited_norm"),
-                    cited_statutes: a.list::<Statute>("cited_statutes"),
-                    limit: a.number("limit"),
-                    bridge: a.boolean("bridge"),
-                })
-                .await,
-        ),
-        (Some("decisions"), "get") => outcome(
-            client
-                .decisions()
-                .get(
-                    &a.required("id"),
-                    GetDecisionParams {
-                        max_chars: a.number("max_chars"),
-                        rn_from: a.number("rn_from"),
-                        rn_to: a.number("rn_to"),
-                        section: a.string("section"),
-                        court: a.string("court"),
-                        date: a.string("date"),
-                    },
-                )
-                .await,
-        ),
-        (Some("decisions"), "citations") => outcome(
-            client
-                .decisions()
-                .citations(
-                    &a.required("id"),
-                    CitationsParams {
-                        direction: a.parsed::<Direction>("direction"),
-                        depth: a
-                            .number("depth")
-                            .map(|n| if n == 1 { Depth::One } else { Depth::Two }),
-                        court: a.string("court"),
-                        date: a.string("date"),
-                        page: a.number("page"),
-                    },
-                )
-                .await,
-        ),
-        (Some("norms"), "get") => outcome(
-            client
-                .norms()
-                .get(
-                    &a.required("reference"),
-                    GetNormParams {
-                        jurisdiction: a.string("jurisdiction"),
-                    },
-                )
-                .await,
-        ),
-        (Some("datapackages"), "create") => outcome(
-            client
-                .datapackages()
-                .create(CreateDatapackageParams {
-                    ids: args
-                        .get("ids")
-                        .and_then(Value::as_array)
-                        .expect("ids")
-                        .iter()
-                        .map(|id| id.as_str().expect("string").to_owned())
-                        .collect(),
-                    include_citations: a.boolean("include_citations"),
-                    full_text: a.boolean("full_text"),
-                    max_chars: a.number("max_chars"),
-                })
-                .await,
-        ),
-        (Some("citation_checks"), "create") => outcome(
-            client
-                .citation_checks()
-                .create(CreateCitationCheckParams {
-                    text: a.string("text"),
-                    document_id: a.string("document_id"),
-                    reference_date: a.string("reference_date"),
-                })
-                .await,
-        ),
+        (Some("decisions"), "search") => {
+            let params = apply!(SearchDecisionsParams::new(a.required("query")), a, {
+                "court" => court(text),
+                "branch" => branch(word),
+                "document_type" => document_type(word),
+                "cited_norm" => cited_norm(text),
+                "date_from" => date_from(text),
+                "date_to" => date_to(text),
+                "mode" => mode(word),
+                "limit" => limit(number),
+                "page" => page(number),
+                "bridge" => bridge(boolean),
+            })
+            .cited_statutes(a.list::<Statute>("cited_statutes"));
+            outcome(client.decisions().search(params).await)
+        }
+        (None, "search") => {
+            let params = apply!(CrossTypeSearchParams::new(a.required("query")), a, {
+                "jurisdiction" => jurisdiction(word),
+                "court" => court(text),
+                "branch" => branch(word),
+                "date_from" => date_from(text),
+                "date_to" => date_to(text),
+                "mode" => mode(word),
+                "document_type" => document_type(word),
+                "cited_norm" => cited_norm(text),
+                "limit" => limit(number),
+                "bridge" => bridge(boolean),
+            })
+            .cited_statutes(a.list::<Statute>("cited_statutes"));
+            outcome(client.search(params).await)
+        }
+        (Some("decisions"), "get") => {
+            let params = apply!(GetDecisionParams::default(), a, {
+                "max_chars" => max_chars(number),
+                "rn_from" => rn_from(number),
+                "rn_to" => rn_to(number),
+                "section" => section(text),
+                "court" => court(text),
+                "date" => date(text),
+            });
+            outcome(client.decisions().get(&a.required("id"), params).await)
+        }
+        (Some("decisions"), "citations") => {
+            let mut params = apply!(CitationsParams::default(), a, {
+                "direction" => direction(word),
+                "court" => court(text),
+                "date" => date(text),
+                "page" => page(number),
+            });
+            if let Some(n) = a.number("depth") {
+                params = params.depth(if n == 1 { Depth::One } else { Depth::Two });
+            }
+            outcome(
+                client
+                    .decisions()
+                    .citations(&a.required("id"), params)
+                    .await,
+            )
+        }
+        (Some("norms"), "get") => {
+            let params = apply!(GetNormParams::default(), a, {
+                "jurisdiction" => jurisdiction(word),
+            });
+            outcome(client.norms().get(&a.required("reference"), params).await)
+        }
+        (Some("datapackages"), "create") => {
+            let ids: Vec<String> = args
+                .get("ids")
+                .and_then(Value::as_array)
+                .expect("ids")
+                .iter()
+                .map(|id| id.as_str().expect("string").to_owned())
+                .collect();
+            let params = apply!(CreateDatapackageParams::new(ids), a, {
+                "include_citations" => include_citations(boolean),
+                "full_text" => full_text(boolean),
+                "max_chars" => max_chars(number),
+            });
+            outcome(client.datapackages().create(params).await)
+        }
+        (Some("citation_checks"), "create") => {
+            let mut params = match (a.string("text"), a.string("document_id")) {
+                (Some(text), Some(document_id)) => {
+                    CreateCitationCheckParams::from_text(text).document_id(document_id)
+                }
+                (Some(text), None) => CreateCitationCheckParams::from_text(text),
+                (None, Some(document_id)) => CreateCitationCheckParams::from_document(document_id),
+                // A params value with neither field can only come from data, as an agent tool would pass.
+                (None, None) => serde_json::from_value(json!({})).expect("empty params"),
+            };
+            if let Some(date) = a.string("reference_date") {
+                params = params.reference_date(date);
+            }
+            outcome(client.citation_checks().create(params).await)
+        }
         (Some("citation_checks"), "get") => {
             outcome(client.citation_checks().get(&a.required("run_id")).await)
         }
@@ -303,28 +309,26 @@ async fn dispatch(
                     .await,
             )
         }
-        (Some("corpus"), "coverage") => outcome(
-            client
-                .corpus()
-                .coverage(CoverageParams {
-                    branch: a.parsed("branch"),
-                    top: a.number("top"),
-                })
-                .await,
-        ),
-        (Some("corpus"), "facets") => outcome(
-            client
-                .corpus()
-                .facets(
-                    a.parsed::<FacetField>("field").expect("field"),
-                    FacetsParams {
-                        type_: a.parsed::<FacetType>("type"),
-                        norm: a.string("norm"),
-                        prefix: a.string("prefix"),
-                    },
-                )
-                .await,
-        ),
+        (Some("corpus"), "coverage") => {
+            let params = apply!(CoverageParams::default(), a, {
+                "branch" => branch(word),
+                "top" => top(number),
+            });
+            outcome(client.corpus().coverage(params).await)
+        }
+        (Some("corpus"), "facets") => {
+            let params = apply!(FacetsParams::default(), a, {
+                "type" => facet_type(word),
+                "norm" => norm(text),
+                "prefix" => prefix(text),
+            });
+            outcome(
+                client
+                    .corpus()
+                    .facets(a.parsed::<FacetField>("field").expect("field"), params)
+                    .await,
+            )
+        }
         other => panic!("the runner has no dispatch for {other:?}"),
     }
 }
@@ -617,10 +621,7 @@ fn error_class(error: &Error) -> &'static str {
         Error::DocumentFailed { .. } => "DocumentFailedError",
         Error::DocumentTimeout { .. } => "DocumentTimeoutError",
         // The pack names the client-side input error ValidationError (code client_validation).
-        Error::Configuration {
-            code: "client_validation",
-            ..
-        } => "ValidationError",
+        Error::ClientValidation { .. } => "ValidationError",
         Error::Configuration { .. } => "ConfigurationError",
         _ => "UnknownError",
     }
@@ -661,7 +662,7 @@ fn error_view(error: &Error) -> Value {
             view.insert("error_code".into(), json!(receipt.error_code));
             view.insert("document".into(), serde_json::to_value(receipt).unwrap());
         }
-        Error::Configuration { message, .. } => {
+        Error::Configuration { message, .. } | Error::ClientValidation { message, .. } => {
             view.insert("message".into(), json!(message));
         }
         _ => {}
@@ -773,7 +774,8 @@ async fn run_case(path: &Path) -> Result<(), String> {
     });
     match options.get("token") {
         None => builder = builder.token("test_token_123"),
-        Some(Value::Null) => {}
+        // The case passes no token: read the environment, as `Klaracase::from_env` does.
+        Some(Value::Null) => builder = builder.token_from_env(),
         Some(token) => builder = builder.token(token.as_str().unwrap()),
     }
     if let Some(n) = options.get("max_retries").and_then(Value::as_u64) {
@@ -784,6 +786,11 @@ async fn run_case(path: &Path) -> Result<(), String> {
     }
     if let Some(suffix) = options.get("user_agent_suffix").and_then(Value::as_str) {
         builder = builder.user_agent_suffix(suffix);
+    }
+    // This case checks how a 422 for an inverted date range maps to an error. The client would
+    // refuse that input itself, so the case runs with the client check off.
+    if case["name"] == "errors.validation_failed_multiple" {
+        builder = builder.client_validation(false);
     }
     if !real_clock {
         builder = builder.sleeper(sleeper.clone()).clock(Arc::new(RealClock));

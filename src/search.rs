@@ -1,5 +1,6 @@
 //! Cross-type search over statutes and decisions: `GET /search`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client::{Klaracase, Request};
@@ -8,37 +9,59 @@ use crate::decisions::DecisionHit;
 use crate::encode::Query;
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::params::{check_date, check_date_range, option_setters, require_text};
 use crate::response::Response;
 use crate::types::{ArtifactType, Branch, Confidence, DocumentType, Jurisdiction, Mode, Statute};
 
 /// Parameters of [`Klaracase::search`].
 ///
-/// A `None` field is not sent. `Some(false)` and `Some(0)` are sent.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Start with [`CrossTypeSearchParams::new`] and chain setters. A field you do not set is not sent;
+/// `limit(0)` and `bridge(false)` are values and are sent.
+///
+/// ```
+/// use klaracase::{CrossTypeSearchParams, Jurisdiction};
+///
+/// let params = CrossTypeSearchParams::new("Kündigung Mietvertrag").jurisdiction(Jurisdiction::De);
+/// assert!(params.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CrossTypeSearchParams {
-    /// German legal-concept phrasing, 2 to 500 characters. Required.
+    /// German legal-concept phrasing. The server requires 2 to 500 characters. Required.
     pub query: String,
     /// Jurisdiction code (`DE`, `EU` or `XI`). It narrows the laws section only.
-    pub jurisdiction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<Open<Jurisdiction>>,
     /// Court name filter on the decisions section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub court: Option<String>,
     /// The Gerichtsbarkeit of the deciding court.
-    pub branch: Option<Branch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<Open<Branch>>,
     /// Earliest decision date, `YYYY-MM-DD`, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_from: Option<String>,
     /// Latest decision date, `YYYY-MM-DD`, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_to: Option<String>,
     /// Retrieval mode. The server default is hybrid.
-    pub mode: Option<Mode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Open<Mode>>,
     /// One decision document type.
-    pub document_type: Option<DocumentType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_type: Option<Open<DocumentType>>,
     /// Decisions whose Normenkette cites this norm, for example `§ 906 BGB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cited_norm: Option<String>,
     /// Any section of these statutes. An empty list is not sent.
-    pub cited_statutes: Vec<Statute>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cited_statutes: Vec<Open<Statute>>,
     /// Maximum results per section. The server caps it at 10.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     /// Whether the server may add terms to the query. The server default is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<bool>,
 }
 
@@ -48,8 +71,74 @@ impl CrossTypeSearchParams {
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             query: query.into(),
-            ..Self::default()
+            jurisdiction: None,
+            court: None,
+            branch: None,
+            date_from: None,
+            date_to: None,
+            mode: None,
+            document_type: None,
+            cited_norm: None,
+            cited_statutes: Vec::new(),
+            limit: None,
+            bridge: None,
         }
+    }
+
+    option_setters! {
+        direct {
+            /// Narrows the laws section to one jurisdiction.
+            open(Jurisdiction) jurisdiction,
+            /// Sets the court name filter on the decisions section.
+            text court,
+            /// Sets the Gerichtsbarkeit filter.
+            open(Branch) branch,
+            /// Sets the earliest decision date, `YYYY-MM-DD`.
+            text date_from,
+            /// Sets the latest decision date, `YYYY-MM-DD`.
+            text date_to,
+            /// Sets the retrieval mode.
+            open(Mode) mode,
+            /// Restricts the decisions section to one document type.
+            open(DocumentType) document_type,
+            /// Restricts the decisions section to decisions that cite this norm.
+            text cited_norm,
+            /// Sets the maximum number of results per section.
+            plain(u32) limit,
+            /// Turns the register-term expansion on or off.
+            plain(bool) bridge,
+        }
+    }
+
+    /// Adds one statute to the `cited_statutes` filter.
+    #[must_use]
+    pub fn cited_statute(mut self, statute: impl Into<Open<Statute>>) -> Self {
+        self.cited_statutes.push(statute.into());
+        self
+    }
+
+    /// Replaces the `cited_statutes` filter.
+    #[must_use]
+    pub fn cited_statutes<I>(mut self, statutes: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Open<Statute>>,
+    {
+        self.cited_statutes = statutes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Checks the shape of the input without any request: a query that is not blank, dates that are
+    /// `YYYY-MM-DD`, and `date_from` not after `date_to`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
+        require_text("query", &self.query)?;
+        check_date("date_from", self.date_from.as_deref())?;
+        check_date("date_to", self.date_to.as_deref())?;
+        check_date_range(self.date_from.as_deref(), self.date_to.as_deref())
     }
 
     fn to_query(&self) -> Query {
@@ -192,6 +281,7 @@ impl Klaracase {
         &self,
         params: CrossTypeSearchParams,
     ) -> Result<Response<CrossTypeSearchResults>, Error> {
+        self.checked(params.validate())?;
         self.execute(Request::get("/search", params.to_query()))
             .await
     }

@@ -13,6 +13,7 @@ mod encode;
 mod error;
 mod norms;
 mod open;
+mod params;
 mod response;
 mod retry;
 mod search;

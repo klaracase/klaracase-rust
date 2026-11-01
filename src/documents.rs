@@ -179,10 +179,10 @@ impl CitationCheckDocuments<'_> {
         Part::bytes(Vec::new())
             .mime_str(&params.content_type)
             .map_err(|_| {
-                Error::config(
-                    "client_validation",
-                    format!("`{}` is not a valid media type", params.content_type),
-                )
+                Error::client_validation(format!(
+                    "`{}` is not a valid media type",
+                    params.content_type
+                ))
             })?;
         let request = Request {
             method: Method::POST,

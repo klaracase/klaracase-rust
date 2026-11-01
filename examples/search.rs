@@ -11,12 +11,11 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let found = client
         .decisions()
-        .search(SearchDecisionsParams {
-            query: "Vermögensbetreuungspflicht Untreue".into(),
-            court: Some("BGH".into()),
-            limit: Some(5),
-            ..Default::default()
-        })
+        .search(
+            SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue")
+                .court("BGH")
+                .limit(5),
+        )
         .await?;
 
     for hit in &found.results {

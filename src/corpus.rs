@@ -8,20 +8,40 @@ use crate::client::{Klaracase, Request};
 use crate::common::{Count, Credits};
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
-use crate::open::response_struct;
+use crate::open::{Open, response_struct};
+use crate::params::option_setters;
 use crate::response::Response;
 use crate::types::{Branch, FacetField, FacetType};
 
 /// Parameters of [`Corpus::coverage`].
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// ```
+/// use klaracase::{Branch, CoverageParams};
+///
+/// let params = CoverageParams::default().branch(Branch::Sozial).top(10);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CoverageParams {
     /// Scope the report to one Gerichtsbarkeit. Omit it to report every branch.
-    pub branch: Option<Branch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<Open<Branch>>,
     /// Cap on the per-court rows, busiest first. The server default is 20 and the maximum is 100.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<u32>,
 }
 
 impl CoverageParams {
+    option_setters! {
+        direct {
+            /// Scopes the report to one Gerichtsbarkeit.
+            open(Branch) branch,
+            /// Caps the per-court rows.
+            plain(u32) top,
+        }
+    }
+
     fn to_query(&self) -> Query {
         let mut query = Query::new();
         query.push_opt("branch", &self.branch);
@@ -262,18 +282,46 @@ response_struct! {
 }
 
 /// Parameters of [`Corpus::facets`].
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// ```
+/// use klaracase::{FacetType, FacetsParams};
+///
+/// let params = FacetsParams::default().facet_type(FacetType::Decision).prefix("BG");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct FacetsParams {
     /// Restrict the counts to one artifact type. Ignored for `cited_norms`.
-    pub type_: Option<FacetType>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub type_: Option<Open<FacetType>>,
     /// Required with [`FacetField::CitedNorms`]: the norm whose family to list, for example
     /// `§ 543 BGB`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub norm: Option<String>,
     /// Case-insensitive prefix filter. A trailing space counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
 }
 
 impl FacetsParams {
+    option_setters! {
+        direct {
+            /// Names the norm whose family to list. Required with `cited_norms`.
+            text norm,
+            /// Filters the values by a case-insensitive prefix.
+            text prefix,
+        }
+    }
+
+    /// Restricts the counts to one artifact type. Ignored for `cited_norms`. The field is `type_`
+    /// because `type` is a Rust keyword.
+    #[must_use]
+    pub fn facet_type(mut self, facet_type: impl Into<Open<FacetType>>) -> Self {
+        self.type_ = Some(facet_type.into());
+        self
+    }
+
     fn to_query(&self) -> Query {
         let mut query = Query::new();
         query.push_opt("type", &self.type_);
@@ -304,7 +352,7 @@ impl Corpus<'_> {
     /// use klaracase::{CoverageParams, Klaracase};
     ///
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
-    /// let coverage = client.corpus().coverage(CoverageParams { top: Some(5), ..Default::default() }).await?;
+    /// let coverage = client.corpus().coverage(CoverageParams::default().top(5)).await?;
     /// for court in &coverage.courts {
     ///     println!("{} {:?}", court.court, court.count.as_ref().map(|c| c.value));
     /// }
@@ -328,7 +376,7 @@ impl Corpus<'_> {
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
     /// let courts = client
     ///     .corpus()
-    ///     .facets(FacetField::CourtName, FacetsParams { prefix: Some("BG".into()), ..Default::default() })
+    ///     .facets(FacetField::CourtName, FacetsParams::default().prefix("BG"))
     ///     .await?;
     /// println!("{:?}", courts.values.get("BGH"));
     /// # Ok(()) }

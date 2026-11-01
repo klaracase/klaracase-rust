@@ -16,6 +16,9 @@ const DETAIL_LIMIT: usize = 1_000;
 /// The `code` of a problem built from an answer that was not a problem body.
 pub const UNKNOWN_CODE: &str = "unknown";
 
+/// The `code` of [`Error::ClientValidation`].
+pub const CLIENT_VALIDATION_CODE: &str = "client_validation";
+
 /// An RFC 9457 problem as the API sends it.
 ///
 /// `type_`, `title`, `status`, `detail` and `code` are the standard members. Every other member of the
@@ -242,13 +245,27 @@ pub enum Error {
         source: serde_json::Error,
     },
 
-    /// A client-side mistake found before any request: no token, an invalid base URL, both `text` and
-    /// `document_id`, or a path parameter that cannot be encoded safely.
+    /// A mistake in how the client was set up, found before any request: no token, an empty token,
+    /// an invalid base URL or a bad timeout.
     #[error("configuration error ({code}): {message}")]
     Configuration {
-        /// A short stable code, for example `missing_token` or `client_validation`.
+        /// A short stable code, for example `missing_token` or `invalid_base_url`.
         code: &'static str,
         /// A sentence for a person.
+        message: String,
+    },
+
+    /// A mistake in the arguments of a call, found before any request: a blank query, a date that is
+    /// not `YYYY-MM-DD`, both or neither of `text` and `document_id`, no ids, or a path parameter
+    /// that cannot be encoded safely. Nothing was sent and nothing was charged.
+    ///
+    /// The shape is checked, never a number the server owns. The server answers a cap that is too
+    /// high with a 422, [`Error::Validation`].
+    #[error("invalid input ({code}): {message}")]
+    ClientValidation {
+        /// Always `client_validation`.
+        code: &'static str,
+        /// A sentence for a person that names the argument.
         message: String,
     },
 
@@ -295,7 +312,7 @@ impl Error {
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         match self {
-            Self::Configuration { code, .. } => Some(code),
+            Self::Configuration { code, .. } | Self::ClientValidation { code, .. } => Some(code),
             Self::DocumentFailed { receipt } => receipt.error_code_text(),
             Self::DocumentTimeout { .. } => Some("wait_timeout"),
             other => other.problem().map(|problem| problem.code.as_str()),
@@ -357,6 +374,14 @@ impl Error {
                 .take(DETAIL_LIMIT)
                 .collect(),
             source,
+        }
+    }
+
+    /// A mistake in the arguments, found before any request.
+    pub(crate) fn client_validation(message: impl Into<String>) -> Self {
+        Self::ClientValidation {
+            code: CLIENT_VALIDATION_CODE,
+            message: message.into(),
         }
     }
 

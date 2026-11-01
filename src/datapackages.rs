@@ -1,28 +1,47 @@
 //! Data packages: `POST /datapackages`.
 
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::client::{Klaracase, Request};
 use crate::common::Credits;
 use crate::decisions::CitationEdge;
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::params::{invalid, option_setters, require_text};
 use crate::response::Response;
 use crate::types::{Jurisdiction, TextMode};
 
 /// Parameters of [`Datapackages::create`].
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// ```
+/// use klaracase::CreateDatapackageParams;
+///
+/// let params = CreateDatapackageParams::new(["1 StR 185/01", "VIII ZR 271/17"])
+///     .include_citations(true)
+///     .full_text(false);
+/// assert!(params.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CreateDatapackageParams {
     /// 1 to 10 decision ids (UUID or Aktenzeichen). Order matters: the response budget drops
     /// decisions from the end. Required.
     pub ids: Vec<String>,
     /// Include each decision's outgoing citation edges. The server default is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_citations: Option<bool>,
     /// Serve whole judgments instead of excerpts of about 700 characters. The server default is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_text: Option<bool>,
     /// Per-decision text cap when `full_text` is true, 500 to 200,000. The server default is 60,000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_chars: Option<u32>,
 }
+
+/// The most ids one data package takes.
+const MAX_IDS: usize = 10;
 
 impl CreateDatapackageParams {
     /// Parameters with only the ids set.
@@ -34,23 +53,43 @@ impl CreateDatapackageParams {
     {
         Self {
             ids: ids.into_iter().map(Into::into).collect(),
-            ..Self::default()
+            include_citations: None,
+            full_text: None,
+            max_chars: None,
         }
     }
 
+    option_setters! {
+        direct {
+            /// Includes or leaves out each decision's outgoing citation edges.
+            plain(bool) include_citations,
+            /// Serves whole judgments instead of excerpts.
+            plain(bool) full_text,
+            /// Caps the text per decision when `full_text` is true.
+            plain(u32) max_chars,
+        }
+    }
+
+    /// Checks the shape of the input without any request: 1 to 10 ids, none of them blank.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.ids.is_empty() || self.ids.len() > MAX_IDS {
+            return Err(invalid(format!(
+                "`ids` must hold 1 to {MAX_IDS} ids, got {}",
+                self.ids.len()
+            )));
+        }
+        for id in &self.ids {
+            require_text("ids[]", id)?;
+        }
+        Ok(())
+    }
+
     fn to_body(&self) -> Value {
-        let mut body = Map::new();
-        body.insert("ids".to_owned(), json!(self.ids));
-        if let Some(value) = self.include_citations {
-            body.insert("include_citations".to_owned(), json!(value));
-        }
-        if let Some(value) = self.full_text {
-            body.insert("full_text".to_owned(), json!(value));
-        }
-        if let Some(value) = self.max_chars {
-            body.insert("max_chars".to_owned(), json!(value));
-        }
-        Value::Object(body)
+        serde_json::to_value(self).expect("plain parameter structs always serialize")
     }
 }
 
@@ -176,10 +215,10 @@ impl Datapackages<'_> {
     /// # async fn run(client: Klaracase) -> Result<(), klaracase::Error> {
     /// let package = client
     ///     .datapackages()
-    ///     .create(CreateDatapackageParams {
-    ///         include_citations: Some(false),
-    ///         ..CreateDatapackageParams::new(["1 StR 185/01", "VIII ZR 271/17"])
-    ///     })
+    ///     .create(
+    ///         CreateDatapackageParams::new(["1 StR 185/01", "VIII ZR 271/17"])
+    ///             .include_citations(false),
+    ///     )
     ///     .await?;
     /// println!("{:?} of {:?} included", package.included, package.requested);
     /// # Ok(()) }
@@ -188,6 +227,7 @@ impl Datapackages<'_> {
         &self,
         params: CreateDatapackageParams,
     ) -> Result<Response<Datapackage>, Error> {
+        self.client.checked(params.validate())?;
         self.client
             .execute(Request::post_json("/datapackages", &params.to_body()))
             .await

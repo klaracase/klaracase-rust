@@ -10,10 +10,7 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let coverage = client
         .corpus()
-        .coverage(CoverageParams {
-            top: Some(3),
-            ..Default::default()
-        })
+        .coverage(CoverageParams::default().top(3))
         .await?;
     println!(
         "coverage: {} courts, API release {:?}, cost {:?}",
@@ -24,13 +21,7 @@ async fn main() -> Result<(), klaracase::Error> {
 
     let facets = client
         .corpus()
-        .facets(
-            FacetField::CourtName,
-            FacetsParams {
-                prefix: Some("BG".into()),
-                ..Default::default()
-            },
-        )
+        .facets(FacetField::CourtName, FacetsParams::default().prefix("BG"))
         .await?;
     println!(
         "court_name facets: {} values, BGH count {:?}",

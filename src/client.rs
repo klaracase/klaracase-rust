@@ -43,11 +43,7 @@ type DeprecationHook = Arc<dyn Fn(DeprecationNotice) + Send + Sync>;
 /// let client = Klaracase::new("klc_your_token_here")?;
 /// let found = client
 ///     .decisions()
-///     .search(SearchDecisionsParams {
-///         query: "Vermögensbetreuungspflicht Untreue".into(),
-///         court: Some("BGH".into()),
-///         ..Default::default()
-///     })
+///     .search(SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue").court("BGH"))
 ///     .await?;
 /// for hit in &found.results {
 ///     println!("{:?} {:?}", hit.aktenzeichen, hit.title);
@@ -65,6 +61,7 @@ struct Inner {
     http: reqwest::Client,
     timeout: Duration,
     max_retries: u32,
+    validate_params: bool,
     user_agent: String,
     sleeper: Arc<dyn Sleeper>,
     clock: Arc<dyn Clock>,
@@ -85,15 +82,26 @@ impl fmt::Debug for Klaracase {
 impl Klaracase {
     /// Creates a client with the default settings.
     ///
-    /// An empty token falls back to the `KLARACASE_API_TOKEN` environment variable. With neither, this
-    /// returns [`Error::Configuration`] and sends no request.
+    /// An empty token is a mistake, not a cue to read the environment: this returns
+    /// [`Error::Configuration`] and sends no request. Use [`Klaracase::from_env`] to read the token
+    /// from `KLARACASE_API_TOKEN`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Configuration`] when the token is empty or holds characters that cannot go in a
+    /// header.
     pub fn new(token: impl Into<String>) -> Result<Self, Error> {
         Self::builder().token(token).build()
     }
 
-    /// Creates a client with the token from `KLARACASE_API_TOKEN`.
+    /// Creates a client with the token from the `KLARACASE_API_TOKEN` environment variable. This is
+    /// the only constructor that reads the environment.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Configuration`] when the variable is unset or empty.
     pub fn from_env() -> Result<Self, Error> {
-        Self::builder().build()
+        Self::builder().token_from_env().build()
     }
 
     /// Starts a [`ClientBuilder`].
@@ -112,6 +120,15 @@ impl Klaracase {
     #[must_use]
     pub fn user_agent(&self) -> &str {
         &self.inner.user_agent
+    }
+
+    /// Passes a parameter check through, unless client validation is off.
+    pub(crate) fn checked(&self, check: Result<(), Error>) -> Result<(), Error> {
+        if self.inner.validate_params {
+            check
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn clock(&self) -> &dyn Clock {
@@ -322,6 +339,7 @@ pub struct ClientBuilder {
     base_url: Option<String>,
     timeout: Option<Duration>,
     max_retries: Option<u32>,
+    client_validation: Option<bool>,
     user_agent_suffix: Option<String>,
     http_client: Option<reqwest::Client>,
     sleeper: Option<Arc<dyn Sleeper>>,
@@ -340,10 +358,17 @@ impl fmt::Debug for ClientBuilder {
 }
 
 impl ClientBuilder {
-    /// Sets the API token. Without it, `KLARACASE_API_TOKEN` is read at [`build`](Self::build).
+    /// Sets the API token. An empty token makes [`build`](Self::build) fail.
     #[must_use]
     pub fn token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
+        self
+    }
+
+    /// Reads the API token from the `KLARACASE_API_TOKEN` environment variable now.
+    #[must_use]
+    pub fn token_from_env(mut self) -> Self {
+        self.token = Some(std::env::var(TOKEN_ENV_VAR).unwrap_or_default());
         self
     }
 
@@ -366,6 +391,18 @@ impl ClientBuilder {
     #[must_use]
     pub fn max_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = Some(max_retries);
+        self
+    }
+
+    /// Turns the client-side check of arguments on or off. The default is on.
+    ///
+    /// The check refuses input whose shape is wrong before any request: a blank query, a date that
+    /// is not `YYYY-MM-DD`, an inverted date range, no ids or more than ten, both or neither of
+    /// `text` and `document_id`. It never enforces a number the server owns. Turn it off to let the
+    /// server judge every call, for example to test how it answers an inverted range.
+    #[must_use]
+    pub fn client_validation(mut self, on: bool) -> Self {
+        self.client_validation = Some(on);
         self
     }
 
@@ -425,27 +462,21 @@ impl ClientBuilder {
     ///
     /// # Errors
     ///
-    /// [`Error::Configuration`] when there is no token (the message names `KLARACASE_API_TOKEN`),
-    /// when the token or the base URL is invalid, or when no [`Sleeper`] is available because the
-    /// `tokio` feature is off and none was given.
+    /// [`Error::Configuration`] when there is no token or it is empty (the message names
+    /// `KLARACASE_API_TOKEN`), when the token or the base URL is invalid, or when no [`Sleeper`] is
+    /// available because the `tokio` feature is off and none was given.
     pub fn build(self) -> Result<Klaracase, Error> {
         let token = self
             .token
             .map(|token| token.trim().to_owned())
             .filter(|token| !token.is_empty())
-            .or_else(|| {
-                std::env::var(TOKEN_ENV_VAR)
-                    .ok()
-                    .map(|token| token.trim().to_owned())
-                    .filter(|token| !token.is_empty())
-            })
             .ok_or_else(|| {
                 Error::config(
                     "missing_token",
                     format!(
-                        "no API token: pass one to Klaracase::new or set the {TOKEN_ENV_VAR} \
-                         environment variable (create a token at \
-                         https://klaracase.de/settings/api-tokens)"
+                        "no API token: pass a non-empty one to Klaracase::new, or call \
+                         Klaracase::from_env with the {TOKEN_ENV_VAR} environment variable set \
+                         (create a token at https://klaracase.de/settings/api-tokens)"
                     ),
                 )
             })?;
@@ -501,6 +532,7 @@ impl ClientBuilder {
                 http,
                 timeout: self.timeout.unwrap_or(DEFAULT_TIMEOUT),
                 max_retries: self.max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
+                validate_params: self.client_validation.unwrap_or(true),
                 user_agent,
                 sleeper,
                 clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),

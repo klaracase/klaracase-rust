@@ -9,7 +9,8 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::client::{Klaracase, Request};
 use crate::common::Credits;
@@ -17,22 +18,38 @@ use crate::common::slice_code_points;
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
 use crate::open::{Open, response_struct};
+use crate::params::{check_date, invalid, option_setters, require_text};
 use crate::response::Response;
 use crate::types::{ReferenceType, RunStatus, Verdict};
 
 /// Parameters of [`CitationChecks::create`]. Send exactly one of `text` and `document_id`.
 ///
-/// Giving both or neither fails on the client with [`Error::Configuration`] (code
-/// `client_validation`) before any request.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Giving both or neither fails on the client with [`Error::ClientValidation`] before any request.
+///
+/// ```
+/// use klaracase::CreateCitationCheckParams;
+///
+/// let params = CreateCitationCheckParams::from_text("Siehe BGH, Urteil vom 15.11.2001 - 1 StR 185/01.")
+///     .reference_date("2024-05-01");
+/// assert!(params.validate().is_ok());
+///
+/// let both = CreateCitationCheckParams::from_text("a").document_id("b");
+/// assert!(both.validate().is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CreateCitationCheckParams {
-    /// The German legal text: 50 to 20,000 characters. Offsets in the answer are Unicode codepoint
-    /// offsets into this exact string.
+    /// The German legal text. The server requires 50 to 20,000 characters. Offsets in the answer are
+    /// Unicode code point offsets into this exact string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// The id of an upload with status `ready`. The check consumes the upload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_id: Option<String>,
     /// The date of the document, `YYYY-MM-DD`. It applies to statute citations whose sentence names
     /// no date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_date: Option<String>,
 }
 
@@ -42,7 +59,8 @@ impl CreateCitationCheckParams {
     pub fn from_text(text: impl Into<String>) -> Self {
         Self {
             text: Some(text.into()),
-            ..Self::default()
+            document_id: None,
+            reference_date: None,
         }
     }
 
@@ -50,45 +68,43 @@ impl CreateCitationCheckParams {
     #[must_use]
     pub fn from_document(document_id: impl Into<String>) -> Self {
         Self {
+            text: None,
             document_id: Some(document_id.into()),
-            ..Self::default()
+            reference_date: None,
         }
     }
 
-    /// Sets the document date (`YYYY-MM-DD`).
-    #[must_use]
-    pub fn with_reference_date(mut self, reference_date: impl Into<String>) -> Self {
-        self.reference_date = Some(reference_date.into());
-        self
+    option_setters! {
+        direct {
+            /// Sets the text to check. Use it or `document_id`, never both.
+            text text,
+            /// Sets the upload to check. Use it or `text`, never both.
+            text document_id,
+            /// Sets the document date (`YYYY-MM-DD`).
+            text reference_date,
+        }
     }
 
-    fn to_body(&self) -> Result<Value, Error> {
+    /// Checks the shape of the input without any request: exactly one of `text` and `document_id`,
+    /// neither of them blank, and a `reference_date` formatted `YYYY-MM-DD`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ClientValidation`] with a message that names the argument.
+    pub fn validate(&self) -> Result<(), Error> {
         match (&self.text, &self.document_id) {
             (Some(_), Some(_)) => {
-                return Err(Error::config(
-                    "client_validation",
-                    "send either `text` or `document_id`, not both",
-                ));
+                return Err(invalid("send either `text` or `document_id`, not both"));
             }
-            (None, None) => {
-                return Err(Error::config(
-                    "client_validation",
-                    "send either `text` or `document_id`",
-                ));
-            }
-            _ => {}
+            (None, None) => return Err(invalid("send either `text` or `document_id`")),
+            (Some(text), None) => require_text("text", text)?,
+            (None, Some(document_id)) => require_text("document_id", document_id)?,
         }
-        let mut body = Map::new();
-        if let Some(text) = &self.text {
-            body.insert("text".to_owned(), json!(text));
-        }
-        if let Some(document_id) = &self.document_id {
-            body.insert("document_id".to_owned(), json!(document_id));
-        }
-        if let Some(reference_date) = &self.reference_date {
-            body.insert("reference_date".to_owned(), json!(reference_date));
-        }
-        Ok(Value::Object(body))
+        check_date("reference_date", self.reference_date.as_deref())
+    }
+
+    fn to_body(&self) -> Value {
+        serde_json::to_value(self).expect("plain parameter structs always serialize")
     }
 }
 
@@ -375,13 +391,13 @@ impl CitationChecks<'_> {
     /// because both guarantee that nothing ran. A dropped connection is not retried; repeating the
     /// call by hand is free in the same period.
     ///
+    /// ```no_run
     /// use klaracase::{CreateCitationCheckParams, Klaracase, Open, Verdict};
-    /// use klaracase::{CreateCitationCheckParams, Klaracase, Verdict};
     ///
     /// # async fn run(client: Klaracase, text: String) -> Result<(), klaracase::Error> {
     /// let run = client
     ///     .citation_checks()
-    ///     .create(CreateCitationCheckParams::from_text(text).with_reference_date("2024-05-01"))
+    ///     .create(CreateCitationCheckParams::from_text(text).reference_date("2024-05-01"))
     ///     .await?;
     /// for finding in &run.findings {
     ///     match finding.verdict.as_ref().and_then(Open::known) {
@@ -396,7 +412,8 @@ impl CitationChecks<'_> {
         &self,
         params: CreateCitationCheckParams,
     ) -> Result<Response<CitationCheckRun>, Error> {
-        let body = params.to_body()?;
+        self.client.checked(params.validate())?;
+        let body = params.to_body();
         self.client
             .execute(Request::post_json("/citation-checks", &body))
             .await
