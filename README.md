@@ -244,6 +244,9 @@ async fn main() {
         Err(Error::InsufficientCredits { cost, balance, .. }) => {
             println!("the call costs {cost:?} credits, the balance is {balance:?}");
         }
+        Err(Error::TokenLimitReached { cap, resets_at, .. }) => {
+            println!("this API key reached its limit of {cap:?} credits, it resets at {resets_at:?}");
+        }
         Err(Error::RateLimit { retry_after_seconds, .. }) => {
             println!("rate limited, retry in {retry_after_seconds:?} seconds");
         }
@@ -263,7 +266,8 @@ async fn main() {
 | `NotFound` | 404 |
 | `Conflict` | 409 |
 | `Validation` | 422. `Problem::errors()` holds the field errors. |
-| `InsufficientCredits { cost, balance, problem }` | 402 |
+| `InsufficientCredits { cost, balance, reason, top_up_url, problem }` | 402 `insufficient_credits`. See Credits, API budget and limits. |
+| `TokenLimitReached { unit, cap, spent, resets_at, settings_url, problem }` | 402 `token_limit_reached`. It has no `cost` and no `balance`. |
 | `RateLimit { retry_after_seconds, problem }` | 429, including `volume_cap` |
 | `ServiceUnavailable` | 503 |
 | `Api` | any other status, and any error body that is not a problem |
@@ -284,7 +288,7 @@ Four helpers cover most handling, so you need not match on every variant:
 - `error.status()` and `error.code()` return the HTTP status and the machine code.
 - `error.headers()` returns the response headers. `Authorization` is never in them.
 
-`Problem` also has typed members for the answers that carry data: `candidates` (422 `ambiguous_aktenzeichen`, the decisions to choose from), `successor` (404 `statute_superseded`), and `unit`, `cap` and `resets_at` (429 `volume_cap`). `Problem::extra` still holds every member.
+`Problem` also has typed members for the answers that carry data: `candidates` (422 `ambiguous_aktenzeichen`, the decisions to choose from), `successor` (404 `statute_superseded`), and `unit`, `cap` and `resets_at` (429 `volume_cap` and 402 `token_limit_reached`). `Problem::extra` still holds every member. The 402 members `reason`, `top_up_url`, `spent` and `settings_url` are typed on the two 402 variants.
 
 `Error` implements `Serialize`. It writes `{"code", "status", "detail", "retry_after_seconds"}`, which is the form to hand to an agent or a log.
 
@@ -318,15 +322,91 @@ The builder also takes `base_url`, your own `reqwest::Client` (`http_client`, fo
 
 To test your own code without the network, hand the builder a `reqwest::Client` that points at a mock server (see Testing).
 
-## Credits
+## Credits, API budget and limits
 
-Calls are billed in credits, to the organization the token is bound to. Search, norm and decision reads cost 1 credit. The citation graph costs 2. A data package costs 5. A citation check costs `max(2, ceil(chars / 5000))`. Coverage, facets, uploads and reading a finished run are free.
+Calls are billed in credits, to the organization the token is bound to. Search, norm and decision reads cost 1 credit. The citation graph costs 2. A data package costs 5. A citation check costs `max(2, ceil(chars / 5000))`. Coverage, facets, uploads and reading a finished run are free. Prices are on <https://klaracase.de/preise>.
 
 One charge covers each operation, organization and subject per credit period. The same call again in the same credit period costs nothing more, on REST or on MCP. Every response carries `credits` with `metered`, `cost` and `credits_remaining`.
 
 Credits renew per credit period: the UTC calendar month for free organizations, the paid billing period for subscribers. Unused credits do not roll over.
 
 The API allows 60 requests per minute per token. The three POST operations (`datapackages`, `citation_checks` and `citation_check_documents` upload) are limited to 10 per minute.
+
+### Plan credits and the API budget
+
+The plan gives an organization a number of plan credits for each credit period. `credits_remaining` is the number of plan credits left after the call. It never counts the API budget.
+
+Organizations on the Professional and Enterprise plans can also load a prepaid API budget. It is optional. The budget pays for API and MCP calls after the plan credits are used up. It does not expire. The web app never draws on it. A call is paid from the budget in whole, never in part. `cost` counts plan credits and budget credits together.
+
+When the organization holds a budget, or may load one, `credits.api_budget` is set:
+
+```rust,no_run
+use klaracase::Klaracase;
+
+#[tokio::main]
+async fn main() {
+    let client = Klaracase::from_env().expect("token");
+    let found = client
+        .decisions()
+        .search("Untreue")
+        .send()
+        .await
+        .expect("search");
+
+    if let Some(budget) = found.credits.as_ref().and_then(|credits| credits.api_budget.as_ref()) {
+        println!(
+            "budget: {:?} cents, {:?} cents per credit, about {:?} more credits",
+            budget.cents, budget.rate_cents_per_credit, budget.credits_at_rate
+        );
+    }
+}
+```
+
+`api_budget` is `None` when the organization has no budget and may not load one. The key is then absent from the answer. `cents` can be negative after a lost payment. `rate_cents_per_credit` is the rate for your organization. `credits_at_rate` is `0` when the budget is empty or on hold.
+
+### Refusals
+
+Three answers say that a call did not run. Nothing was charged for any of them. The client never retries a 402, and it does not open any link in an answer.
+
+| Error | What it means | What a program should do |
+|---|---|---|
+| `InsufficientCredits` with `reason` `ApiBudgetEmpty` | The plan credits are used up. The organization may load an API budget, and what it holds does not cover the call. | Stop. Report to your user that an organization admin can top up the API budget. |
+| `InsufficientCredits` with `reason` `ApiBudgetNotAvailable` | The plan credits are used up. The organization has no API budget to draw on, or the budget is on hold. | Stop. Report to your user that the plan credits are used up. |
+| `InsufficientCredits` without `reason` | The plan credits are used up and the answer says no more. | Stop. Report to your user. |
+| `TokenLimitReached` | The credit limit set for this one API key is used up for the period. | Stop. Report to your user that the key is at its limit until `resets_at`. |
+
+`reason` is an `Open<InsufficientCreditsReason>`. It also has a reserved value, `PlanCreditsExhausted`, that the API does not send today. A reason this crate does not know stays a string in `Open::Other`. Treat it like `ApiBudgetNotAvailable`.
+
+`top_up_url` (on `InsufficientCredits`) and `settings_url` (on `TokenLimitReached`) are for a human organization admin. Show them to your user. A program or an AI agent must never open them or follow them. The `detail` sentence of the answer can also name the page.
+
+Each API key can have its own credit limit for the period, set by an organization admin. `TokenLimitReached` carries `unit` (always `credits`), `cap` (the limit), `spent` (the credits the key used in the period, plan credits and budget together) and `resets_at` (an RFC 3339 time, as the server sent it). It has no `cost` and no `balance`, and any of its members is `None` when the answer leaves it out.
+
+```rust,no_run
+use klaracase::{Error, InsufficientCreditsReason, Klaracase, Open};
+
+#[tokio::main]
+async fn main() {
+    let client = Klaracase::from_env().expect("token");
+
+    match client.decisions().search("Untreue").send().await {
+        Ok(found) => println!("{} results", found.results.len()),
+        Err(Error::InsufficientCredits { reason, top_up_url, .. }) => {
+            match reason {
+                Some(Open::Known(InsufficientCreditsReason::ApiBudgetEmpty)) => {
+                    println!("The API budget is empty. Ask an organization admin to top it up.");
+                    println!("Page for the admin: {top_up_url:?}");
+                }
+                _ => println!("The plan credits are used up."),
+            }
+            // Stop here. Do not retry. Do not open the link.
+        }
+        Err(Error::TokenLimitReached { cap, spent, resets_at, .. }) => {
+            println!("This API key used {spent:?} of {cap:?} credits. It resets at {resets_at:?}.");
+        }
+        Err(other) => println!("{other}"),
+    }
+}
+```
 
 ## Tracing
 
@@ -367,7 +447,7 @@ fn client_for_tests(mock_server_url: &str) -> Result<Klaracase, klaracase::Error
 }
 ```
 
-Set `max_retries(0)` when a test expects the first error, so the test does not wait for a retry. This crate's own tests run against a mock server on a raw socket, with the 102 shared conformance cases from `tests/fixtures/conformance`.
+Set `max_retries(0)` when a test expects the first error, so the test does not wait for a retry. This crate's own tests run against a mock server on a raw socket, with the 106 shared conformance cases from `tests/fixtures/conformance`.
 
 ## Requirements
 
@@ -377,7 +457,7 @@ Set `max_retries(0)` when a test expects the first error, so the test does not w
 
 ## Versioning
 
-This SDK is 0.x and tracks API release 0.95.0. Until 1.0, a minor version (0.1 to 0.2) may change the public surface, and a patch version (0.1.0 to 0.1.1) will not break your code. CI runs `cargo semver-checks` against the previous release tag to catch an accidental break. Every change is listed in [CHANGELOG.md](CHANGELOG.md). All Klaracase SDKs bump together when the API contract changes.
+This SDK is 0.x and tracks API release 0.96.0. Until 1.0, a minor version (0.1 to 0.2) may change the public surface, and a patch version (0.1.0 to 0.1.1) will not break your code. CI runs `cargo semver-checks` against the previous release tag to catch an accidental break. Every change is listed in [CHANGELOG.md](CHANGELOG.md). All Klaracase SDKs bump together when the API contract changes.
 
 ## Privacy
 
