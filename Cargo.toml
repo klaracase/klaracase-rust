@@ -6,9 +6,8 @@ rust-version = "1.85"
 description = "Official Rust client for the Klaracase REST API: German court decisions, statutes and citation checks."
 license = "MIT"
 readme = "README.md"
-# TODO: replace <org> with the GitHub organization login once the owner has confirmed it.
-repository = "https://github.com/<org>/klaracase-rust"
-homepage = "https://github.com/<org>/klaracase-rust"
+repository = "https://github.com/klaracase/klaracase-rust"
+homepage = "https://klaracase.de"
 documentation = "https://docs.rs/klaracase"
 keywords = ["klaracase", "legal", "germany", "api-client", "citation"]
 categories = ["api-bindings"]

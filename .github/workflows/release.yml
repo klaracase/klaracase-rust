@@ -31,7 +31,7 @@ jobs:
       - run: cargo package --locked
 
   # TODO: the first release must be manual (`cargo publish` from a trusted machine), and trusted
-  # publishing must be configured on crates.io for crate klaracase, repository <org>/klaracase-rust,
+  # publishing must be configured on crates.io for crate klaracase, repository klaracase/klaracase-rust,
   # workflow release.yml. Then enable this job. Check that the pinned SHA below is still the release
   # you trust before you enable it.
   #
