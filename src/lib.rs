@@ -32,7 +32,9 @@ pub use decisions::{
     GetDecisionParams, SearchDecisionsParams, SearchHit,
 };
 pub use deprecation::{DeprecationNotice, reset_deprecation_guard};
-pub use documents::{DocumentReceipt, DocumentStatus};
+pub use documents::{
+    CitationCheckDocuments, DocumentReceipt, DocumentStatus, UploadParams, WaitParams,
+};
 pub use error::{Error, Problem};
 pub use norms::{
     GetNormParams, Norm, NormBody, NormLaw, NormLinks, NormNeighbours, NormVersion, Norms,
