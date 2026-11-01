@@ -7,10 +7,10 @@ description = "Official Rust client for the Klaracase REST API: German court dec
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/klaracase/klaracase-rust"
-homepage = "https://klaracase.de"
+homepage = "https://klaracase.de/developers?ref=crates"
 documentation = "https://docs.rs/klaracase"
-keywords = ["klaracase", "legal", "germany", "api-client", "citation"]
-categories = ["api-bindings"]
+keywords = ["klaracase", "german-law", "legal", "citation", "mcp"]
+categories = ["api-bindings", "web-programming::http-client"]
 build = "build.rs"
 exclude = [".github/", "Makefile"]
 
