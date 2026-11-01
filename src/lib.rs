@@ -27,7 +27,7 @@ pub use citation_checks::{
     UniqueCitation,
 };
 pub use client::{ClientBuilder, Klaracase};
-pub use common::{Count, Credits, QueryExpansion, Snippet};
+pub use common::{ApiBudget, Count, Credits, QueryExpansion, Snippet};
 pub use corpus::{
     BranchCoverage, Corpus, CorpusCoverage, CourtCoverage, CoverageParams, CoverageRange,
     CoverageRanges, FacetValues, Facets, FacetsParams, InstanceMix, LawCoverage,
