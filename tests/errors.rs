@@ -12,6 +12,9 @@ use common::{FakeTime, MockResponse, MockServer};
 
 const SUPERSEDED: &str = include_str!("fixtures/conformance/problems/statute_superseded.json");
 const AMBIGUOUS: &str = include_str!("fixtures/conformance/problems/ambiguous_aktenzeichen.json");
+const TOKEN_LIMIT: &str = include_str!("fixtures/conformance/problems/token_limit_reached.json");
+const BUDGET_EMPTY: &str =
+    include_str!("fixtures/conformance/problems/insufficient_credits.api_budget_empty.json");
 const VOLUME_CAP: &str = include_str!("fixtures/conformance/problems/volume_cap.json");
 
 fn problem(status: u16, code: &str, extra: Value) -> String {
@@ -48,6 +51,7 @@ async fn only_transient_errors_are_retryable() {
     let cases = [
         (401, "unauthenticated", false),
         (402, "insufficient_credits", false),
+        (402, "token_limit_reached", false),
         (403, "token_ability_missing", false),
         (404, "not_found", false),
         (409, "document_unavailable", false),
@@ -212,4 +216,60 @@ async fn an_error_serializes_to_four_members() {
     let setup = serde_json::to_value(Klaracase::new("").unwrap_err()).unwrap();
     assert_eq!(setup["code"], "missing_token");
     assert_eq!(setup.as_object().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn a_402_refusal_is_never_retried_even_with_retries_on_and_a_retry_after_header() {
+    for body in [TOKEN_LIMIT, BUDGET_EMPTY] {
+        let mut refusal = MockResponse::json(402, body);
+        refusal
+            .headers
+            .push(("retry-after".to_owned(), "1".to_owned()));
+        let server = MockServer::start(vec![refusal], true).await;
+        let time = FakeTime::new();
+        let client = Klaracase::builder()
+            .token("klc_your_token_here")
+            .base_url(server.base_url())
+            .max_retries(5)
+            .sleeper(Arc::new(time.clone()))
+            .clock(Arc::new(time))
+            .build()
+            .unwrap();
+
+        let error = client.norms().get("§ 1 BGB").await.unwrap_err();
+
+        assert_eq!(server.requests().len(), 1, "{error}");
+        assert!(!error.is_retryable());
+        assert_eq!(error.status(), Some(402));
+    }
+}
+
+#[tokio::test]
+async fn the_two_402_refusals_read_with_their_own_typed_members() {
+    let limit = failure(MockResponse::json(402, TOKEN_LIMIT)).await;
+    let Error::TokenLimitReached {
+        cap,
+        spent,
+        settings_url,
+        ..
+    } = &limit
+    else {
+        panic!("{limit:?}");
+    };
+    assert_eq!((*cap, *spent), (Some(500), Some(500)));
+    assert!(settings_url.is_some());
+    assert_eq!(limit.problem().unwrap().cap, Some(500));
+
+    let empty = failure(MockResponse::json(402, BUDGET_EMPTY)).await;
+    let Error::InsufficientCredits {
+        reason, top_up_url, ..
+    } = &empty
+    else {
+        panic!("{empty:?}");
+    };
+    assert_eq!(
+        *reason,
+        Some(klaracase::InsufficientCreditsReason::ApiBudgetEmpty.into())
+    );
+    assert!(top_up_url.is_some());
 }

@@ -5,8 +5,8 @@
 
 use klaracase::{
     CitationCheckRun, CitationGraph, CorpusCoverage, CrossTypeSearchResults, Datapackage, Decision,
-    DecisionSearchResults, DocumentReceipt, Extras, Facets, Norm, Open, RunStatus, Verdict,
-    WireValue,
+    DecisionSearchResults, DocumentReceipt, Extras, Facets, InsufficientCreditsReason, Norm, Open,
+    RunStatus, Verdict, WireValue,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -429,4 +429,84 @@ fn a_finding_excerpt_counts_code_points_not_bytes() {
     let text = format!("{prefix}{span} und mehr");
     assert_eq!(finding.excerpt(&text), Some(span));
     assert_eq!(finding.excerpt(""), None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// API 0.96.0: credits.api_budget
+// ---------------------------------------------------------------------------------------------
+
+/// The one conformance body that carries `credits.api_budget`.
+fn api_budget_body() -> Value {
+    let path = format!(
+        "{}/tests/fixtures/conformance/bodies/decisions.search.api_budget.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}")))
+        .expect("body is JSON")
+}
+
+#[test]
+fn the_api_budget_body_round_trips_and_every_key_is_declared() {
+    let raw = api_budget_body();
+    assert!(
+        raw["credits"]["api_budget"].is_object(),
+        "the body has a budget"
+    );
+    assert!(!has_undeclared_key::<DecisionSearchResults>(&raw));
+    let written = round_trip::<DecisionSearchResults>(&raw).expect("round trip");
+    assert_eq!(strip_nulls(&written), strip_nulls(&raw));
+    let typed: DecisionSearchResults = serde_json::from_value(raw).unwrap();
+    let budget = typed
+        .credits
+        .and_then(|credits| credits.api_budget)
+        .expect("budget");
+    assert_eq!(
+        (
+            budget.cents,
+            budget.rate_cents_per_credit,
+            budget.credits_at_rate
+        ),
+        (Some(4991), Some(9), Some(554))
+    );
+}
+
+#[test]
+fn the_api_budget_guard_fails_on_an_unknown_key_and_a_null_still_decodes() {
+    // A guard counts only once it has been seen to fail.
+    let mut raw = api_budget_body();
+    raw["credits"]["api_budget"]["surprise"] = json!("a key from a later release");
+    assert!(has_undeclared_key::<DecisionSearchResults>(&raw));
+
+    let raw = api_budget_body();
+    let mut all = Vec::new();
+    pointers(&raw["credits"], "/credits", &mut all);
+    assert!(all.iter().any(|p| p.ends_with("/credits_at_rate")));
+    for pointer in all {
+        let mut changed = raw.clone();
+        *changed.pointer_mut(&pointer).expect("pointer") = Value::Null;
+        round_trip::<DecisionSearchResults>(&changed)
+            .unwrap_or_else(|e| panic!("null at {pointer} fails: {e}"));
+    }
+}
+
+#[test]
+fn every_insufficient_credits_reason_round_trips_and_a_later_one_stays_a_string() {
+    for reason in [
+        InsufficientCreditsReason::ApiBudgetEmpty,
+        InsufficientCreditsReason::ApiBudgetNotAvailable,
+        InsufficientCreditsReason::PlanCreditsExhausted,
+    ] {
+        assert_eq!(
+            InsufficientCreditsReason::from_wire(reason.as_str()),
+            Some(reason)
+        );
+        assert_eq!(
+            reason.as_str().parse::<InsufficientCreditsReason>(),
+            Ok(reason)
+        );
+    }
+    let later: Open<InsufficientCreditsReason> =
+        serde_json::from_value(json!("plan_on_hold")).unwrap();
+    assert_eq!(later.known(), None);
+    assert_eq!(serde_json::to_value(&later).unwrap(), json!("plan_on_hold"));
 }

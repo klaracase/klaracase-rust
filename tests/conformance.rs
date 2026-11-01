@@ -22,7 +22,7 @@ use serde_json::{Map, Value, json};
 
 use common::{MockResponse, MockServer, RecordedRequest};
 
-const EXPECTED_CASES: usize = 102;
+const EXPECTED_CASES: usize = 106;
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance")
@@ -617,7 +617,11 @@ fn error_class(error: &Error) -> &'static str {
         Error::NotFound(_) => "NotFoundError",
         Error::Conflict(_) => "ConflictError",
         Error::Validation(_) => "ValidationError",
-        Error::InsufficientCredits { .. } => "InsufficientCreditsError",
+        // The pack classes by HTTP status: a 402 `token_limit_reached` is an InsufficientCreditsError
+        // there. This crate gives it a variant of its own.
+        Error::InsufficientCredits { .. } | Error::TokenLimitReached { .. } => {
+            "InsufficientCreditsError"
+        }
         Error::RateLimit { .. } => "RateLimitError",
         Error::ServiceUnavailable(_) => "ServiceUnavailableError",
         Error::Api(_) => "ApiError",
@@ -652,9 +656,46 @@ fn error_view(error: &Error) -> Value {
         }
     }
     match error {
-        Error::InsufficientCredits { cost, balance, .. } => {
+        Error::InsufficientCredits {
+            cost,
+            balance,
+            reason,
+            top_up_url,
+            ..
+        } => {
             view.insert("cost".into(), json!(cost));
             view.insert("balance".into(), json!(balance));
+            // The typed members win over `extra`, so the case checks the typed field. An absent
+            // one is removed, not left as the `extra` copy.
+            view.remove("reason");
+            view.remove("top_up_url");
+            if let Some(reason) = reason {
+                view.insert("reason".into(), json!(reason.as_str()));
+            }
+            if let Some(url) = top_up_url {
+                view.insert("top_up_url".into(), json!(url));
+            }
+        }
+        Error::TokenLimitReached {
+            unit,
+            cap,
+            spent,
+            resets_at,
+            settings_url,
+            ..
+        } => {
+            for (key, value) in [
+                ("unit", json!(unit)),
+                ("cap", json!(cap)),
+                ("spent", json!(spent)),
+                ("resets_at", json!(resets_at)),
+                ("settings_url", json!(settings_url)),
+            ] {
+                view.remove(key);
+                if !value.is_null() {
+                    view.insert(key.into(), value);
+                }
+            }
         }
         Error::RateLimit {
             retry_after_seconds,
