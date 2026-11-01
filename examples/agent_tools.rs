@@ -7,10 +7,16 @@
 //!   (feature `schemars`).
 //! - `call_tool` runs one call by name and always returns JSON. A failed call becomes
 //!   `{"error": {"code", "status", "detail", "retry_after_seconds"}}`, so the model can read the
-//!   reason and decide whether to try again.
+//!   reason and decide whether to try again. A 402 `insufficient_credits` adds `reason` when the
+//!   server gave one. A 402 `token_limit_reached` is never retried by the client and reads the
+//!   same way; both mean the model must stop and tell its user. The page links of those two
+//!   answers (`top_up_url`, `settings_url`) are for a human admin and never go into the output as
+//!   members, so the model has nothing to open.
 //! - The answers are cut down. `get_decision` returns at most 4,000 characters of text unless the
 //!   model asks for more. `check_citations` returns the verdict counts, the unique citations and
-//!   one short entry per finding.
+//!   one short entry per finding. A pass-through answer drops `credits.api_budget`: the budget
+//!   is money of the organization and is for your program, not for the model. Read it from the
+//!   typed response if you need it.
 //!
 //! Print the definitions:
 //!
@@ -119,8 +125,33 @@ pub fn tool_definitions() -> Vec<Value> {
 pub async fn call_tool(client: &Klaracase, name: &str, arguments: Value) -> Value {
     match run(client, name, arguments).await {
         Ok(output) => output,
-        Err(error) => json!({ "error": error }),
+        Err(error) => json!({ "error": error_json(&error) }),
     }
+}
+
+/// The error as the model reads it: the four members of `Error`'s JSON form, plus `reason` for a
+/// 402 `insufficient_credits` that has one. The `detail` text is the server's own sentence.
+fn error_json(error: &Error) -> Value {
+    let mut out = serde_json::to_value(error).unwrap_or_else(|_| json!({}));
+    if let (
+        Error::InsufficientCredits {
+            reason: Some(reason),
+            ..
+        },
+        Some(members),
+    ) = (error, out.as_object_mut())
+    {
+        members.insert("reason".to_owned(), json!(reason.as_str()));
+    }
+    out
+}
+
+/// A pass-through answer without the organization's API budget.
+fn without_budget(mut answer: Value) -> Value {
+    if let Some(credits) = answer.get_mut("credits").and_then(Value::as_object_mut) {
+        credits.remove("api_budget");
+    }
+    answer
 }
 
 async fn run(client: &Klaracase, name: &str, arguments: Value) -> Result<Value, Error> {
@@ -128,12 +159,12 @@ async fn run(client: &Klaracase, name: &str, arguments: Value) -> Result<Value, 
         "search_decisions" => {
             let params: SearchDecisionsParams = parse(arguments)?;
             let found = client.decisions().search_with(params).await?;
-            Ok(found.raw().clone())
+            Ok(without_budget(found.raw().clone()))
         }
         "cross_type_search" => {
             let params: CrossTypeSearchParams = parse(arguments)?;
             let found = client.search_with(params).await?;
-            Ok(found.raw().clone())
+            Ok(without_budget(found.raw().clone()))
         }
         "get_decision" => {
             let (id, rest) = take_string(arguments, "id")?;
@@ -148,7 +179,7 @@ async fn run(client: &Klaracase, name: &str, arguments: Value) -> Result<Value, 
             let (reference, rest) = take_string(arguments, "reference")?;
             let params: GetNormParams = parse(rest)?;
             let norm = client.norms().get_with(&reference, params).await?;
-            Ok(norm.raw().clone())
+            Ok(without_budget(norm.raw().clone()))
         }
         "check_citations" => {
             let params: CreateCitationCheckParams = parse(arguments)?;

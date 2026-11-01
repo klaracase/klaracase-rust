@@ -17,6 +17,14 @@ use common::{MockResponse, MockServer};
 const DECISION_BODY: &str = include_str!("fixtures/examples/decisions.show.json");
 const CHECK_BODY: &str = include_str!("fixtures/examples/citation-checks.show.json");
 const SEARCH_BODY: &str = include_str!("fixtures/examples/decisions.search.json");
+const BUDGET_BODY: &str =
+    include_str!("fixtures/conformance/bodies/decisions.search.api_budget.json");
+const TOKEN_LIMIT: &str = include_str!("fixtures/conformance/problems/token_limit_reached.json");
+const BUDGET_EMPTY: &str =
+    include_str!("fixtures/conformance/problems/insufficient_credits.api_budget_empty.json");
+const BUDGET_NOT_AVAILABLE: &str = include_str!(
+    "fixtures/conformance/problems/insufficient_credits.api_budget_not_available.json"
+);
 
 fn client_for(server: &MockServer) -> Klaracase {
     Klaracase::builder()
@@ -194,4 +202,65 @@ async fn failures_become_error_json_with_four_members() {
         );
     }
     assert_eq!(server.requests().len(), 1, "bad arguments send no request");
+}
+
+#[tokio::test]
+async fn a_402_refusal_reads_as_error_json_and_is_not_retried() {
+    for (body, code, reason) in [
+        (TOKEN_LIMIT, "token_limit_reached", None),
+        (
+            BUDGET_EMPTY,
+            "insufficient_credits",
+            Some("api_budget_empty"),
+        ),
+        (
+            BUDGET_NOT_AVAILABLE,
+            "insufficient_credits",
+            Some("api_budget_not_available"),
+        ),
+    ] {
+        let server = MockServer::start(vec![MockResponse::json(402, body)], true).await;
+        let out = agent_tools::call_tool(
+            &client_for(&server),
+            "search_decisions",
+            json!({"query": "Untreue"}),
+        )
+        .await;
+
+        let error = out["error"].as_object().unwrap();
+        assert_eq!(error["code"], code, "{out}");
+        assert_eq!(error["status"], 402);
+        assert_eq!(error["retry_after_seconds"], Value::Null);
+        assert_eq!(error.get("reason").and_then(Value::as_str), reason, "{out}");
+        for link in ["top_up_url", "settings_url"] {
+            assert!(
+                !error.contains_key(link),
+                "{link} is for a human admin: {out}"
+            );
+        }
+        assert_eq!(server.requests().len(), 1, "a 402 is not retried");
+    }
+}
+
+#[tokio::test]
+async fn a_pass_through_answer_drops_the_api_budget_and_keeps_the_rest_of_credits() {
+    let server = MockServer::start(vec![MockResponse::json(200, BUDGET_BODY)], true).await;
+    let out = agent_tools::call_tool(
+        &client_for(&server),
+        "search_decisions",
+        json!({"query": "Untreue"}),
+    )
+    .await;
+
+    let credits = out["credits"].as_object().unwrap();
+    assert!(!credits.contains_key("api_budget"), "{out}");
+    assert_eq!(credits["cost"], 1);
+    assert_eq!(credits["credits_remaining"], 0);
+    // The answer is otherwise unchanged.
+    let mut wanted: Value = serde_json::from_str(BUDGET_BODY).unwrap();
+    wanted["credits"]
+        .as_object_mut()
+        .unwrap()
+        .remove("api_budget");
+    assert_eq!(out, wanted);
 }
