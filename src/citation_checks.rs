@@ -7,14 +7,18 @@
 //! citation is fabricated. `verified_corpus` proves that the cited decision or statute exists in the
 //! corpus. It does not prove that a quote or a legal proposition is correct.
 
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value, json};
 
 use crate::client::{Klaracase, Request};
 use crate::common::Credits;
+use crate::common::slice_code_points;
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
-use crate::response::{Response, impl_extras};
+use crate::open::{Open, response_struct};
+use crate::response::Response;
+use crate::types::{ReferenceType, RunStatus, Verdict};
 
 /// Parameters of [`CitationChecks::create`]. Send exactly one of `text` and `document_id`.
 ///
@@ -88,308 +92,266 @@ impl CreateCitationCheckParams {
     }
 }
 
-/// The verdicts of a citation. The set is closed on the server; unknown values stay readable.
-///
-/// Match a verdict with these constants:
-///
-/// ```
-/// use klaracase::Verdict;
-///
-/// fn describe(verdict: &str) -> &'static str {
-///     match verdict {
-///         Verdict::VERIFIED_CORPUS => "the cited source exists in the corpus",
-///         Verdict::NOT_FOUND => "not found in the corpus; this does not mean it is invented",
-///         Verdict::DISCREPANCY => "the source exists but a detail differs",
-///         _ => "needs a human look",
-///     }
-/// }
-/// assert_eq!(describe("not_found"), "not found in the corpus; this does not mean it is invented");
-/// ```
-#[derive(Debug, Clone, Copy)]
-pub struct Verdict;
-
-impl Verdict {
-    /// The citation resolves to a decision or statute in the corpus.
-    pub const VERIFIED_CORPUS: &'static str = "verified_corpus";
-    /// The citation resolves in an external register.
-    pub const VERIFIED_EXTERNAL: &'static str = "verified_external";
-    /// The citation was not found in the corpus. That is all the verdict says.
-    pub const NOT_FOUND: &'static str = "not_found";
-    /// The citation points outside the period or courts the corpus covers.
-    pub const OUT_OF_COVERAGE: &'static str = "out_of_coverage";
-    /// More than one source fits the citation.
-    pub const AMBIGUOUS: &'static str = "ambiguous";
-    /// The citation cannot be checked.
-    pub const UNVERIFIABLE: &'static str = "unverifiable";
-    /// The source exists but a detail of the citation differs.
-    pub const DISCREPANCY: &'static str = "discrepancy";
-}
-
-/// The statuses of a citation check run.
-#[derive(Debug, Clone, Copy)]
-pub struct RunStatus;
-
-impl RunStatus {
-    /// Waiting to start.
-    pub const PENDING: &'static str = "pending";
-    /// Checking the input.
-    pub const GATING: &'static str = "gating";
-    /// Extracting citations.
-    pub const EXTRACTING: &'static str = "extracting";
-    /// Resolving citations.
-    pub const RESOLVING: &'static str = "resolving";
-    /// Checking external registers.
-    pub const CHECKING_EXTERNAL: &'static str = "checking_external";
-    /// Finished.
-    pub const COMPLETE: &'static str = "complete";
-    /// Refused.
-    pub const REJECTED: &'static str = "rejected";
-    /// Failed.
-    pub const FAILED: &'static str = "failed";
-}
-
-/// How far a run got.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CheckProgress {
-    /// Citations found, counting repeats.
-    #[serde(default)]
-    pub citations_total: u64,
-    /// Citations checked so far.
-    #[serde(default)]
-    pub citations_checked: u64,
-    /// Distinct citations.
-    #[serde(default)]
-    pub unique_citations_total: u64,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-/// A reason for unverified citations and how many there are.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ReasonCount {
-    /// For example `statute_unknown`.
-    #[serde(default)]
-    pub category: String,
-    /// How many citations.
-    #[serde(default)]
-    pub count: u64,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-/// One distinct citation with all its spellings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UniqueCitation {
-    /// How the key was formed, for example `matched_decision` or `canonical`.
-    #[serde(default)]
-    pub key_basis: String,
-    /// The artifact id of the match, if there is one.
-    #[serde(default)]
-    pub target_artifact_id: Option<String>,
-    /// The canonical form, for example `BGH 1 StR 185/01`.
-    #[serde(default)]
-    pub canonical: String,
-    /// Every spelling found in the text.
-    #[serde(default)]
-    pub spellings: Vec<String>,
-    /// How often it occurs.
-    #[serde(default)]
-    pub occurrences: u64,
-    /// See [`Verdict`].
-    #[serde(default)]
-    pub verdict: String,
-    /// `case` or `statute`.
-    #[serde(default)]
-    pub reference_type: String,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-/// The decision a citation matched.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MatchedDecision {
-    /// The artifact id.
-    #[serde(default)]
-    pub artifact_id: String,
-    /// The ECLI.
-    #[serde(default)]
-    pub ecli: Option<String>,
-    /// The court short form.
-    #[serde(default)]
-    pub court: Option<String>,
-    /// The decision date.
-    #[serde(default)]
-    pub date: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-/// One citation found in the text.
-///
-/// Offsets are Unicode codepoint offsets into the text you sent. They are not byte offsets.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Finding {
-    /// The finding id.
-    #[serde(default)]
-    pub id: String,
-    /// The citation as written in the text.
-    #[serde(default)]
-    pub raw_text: String,
-    /// The canonical form.
-    #[serde(default)]
-    pub canonical: String,
-    /// `case` or `statute`.
-    #[serde(rename = "type", default)]
-    pub type_: String,
-    /// The role of the citation in the text.
-    #[serde(default)]
-    pub role: Option<String>,
-    /// See [`Verdict`].
-    #[serde(default)]
-    pub verdict: String,
-    /// The state of the external register check, for example `skipped`.
-    #[serde(default)]
-    pub external_status: Option<String>,
-    /// Start of the citation, in codepoints.
-    #[serde(default)]
-    pub start_offset: u64,
-    /// End of the citation, in codepoints, exclusive.
-    #[serde(default)]
-    pub end_offset: u64,
-    /// The index among occurrences of the same citation.
-    #[serde(default)]
-    pub occurrence_index: u64,
-    /// The confidence of the extraction, when given.
-    #[serde(default)]
-    pub confidence: Option<Value>,
-    /// The decision this citation matched.
-    #[serde(default)]
-    pub matched_decision: Option<MatchedDecision>,
-    /// The result of the check of the cited subdivision.
-    #[serde(default)]
-    pub subdivision_check: Option<String>,
-    /// A German advisory about the subdivision.
-    #[serde(default)]
-    pub subdivision_advisory: Option<String>,
-    /// What the check covered.
-    #[serde(default)]
-    pub check_scope: Option<Value>,
-    /// A German advisory about ambiguity.
-    #[serde(default)]
-    pub ambiguity_advisory: Option<String>,
-    /// Coverage facts for an `out_of_coverage` verdict.
-    #[serde(default)]
-    pub coverage: Option<Value>,
-    /// The coverage boundary.
-    #[serde(default)]
-    pub coverage_boundary: Option<Value>,
-    /// A German advisory about coverage.
-    #[serde(default)]
-    pub coverage_advisory: Option<String>,
-    /// The evidence behind the verdict, with `reason` and `match_strength`.
-    #[serde(default)]
-    pub evidence: Option<Value>,
-    /// When the finding was disputed, if it was.
-    #[serde(default)]
-    pub disputed_at: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-/// The answer of [`CitationChecks::create`] and [`CitationChecks::get`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CitationCheckRun {
-    /// The run id. Read the run again with [`CitationChecks::get`].
-    pub id: String,
-    /// See [`RunStatus`].
-    #[serde(default)]
-    pub status: String,
-    /// For example `api_v1`.
-    #[serde(default)]
-    pub source: String,
-    /// How far the run got.
-    #[serde(default)]
-    pub progress: Option<CheckProgress>,
-    /// Citations per verdict. Keys are [`Verdict`] values.
-    #[serde(default)]
-    pub verdict_counts: Map<String, Value>,
-    /// True when not every citation was checked.
-    #[serde(default)]
-    pub partial: bool,
-    /// How many citations stayed unverified.
-    #[serde(default)]
-    pub unverified_count: u64,
-    /// Reasons for unverified citations.
-    #[serde(default)]
-    pub reason_counts: Vec<ReasonCount>,
-    /// Distinct citations.
-    #[serde(default)]
-    pub unique_citations: Vec<UniqueCitation>,
-    /// Extraction statistics.
-    #[serde(default)]
-    pub extraction: Value,
-    /// Notes about the run.
-    #[serde(default)]
-    pub notes: Vec<Value>,
-    /// Why `findings` is empty, when it is.
-    #[serde(default)]
-    pub findings_unavailable_reason: Option<String>,
-    /// When the findings were purged, if they were.
-    #[serde(default)]
-    pub findings_purged_at: Option<String>,
-    /// One finding per citation occurrence.
-    #[serde(default)]
-    pub findings: Vec<Finding>,
-    /// When the run was submitted.
-    #[serde(default)]
-    pub submitted_at: Option<String>,
-    /// When the run finished.
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    /// When the run was created.
-    #[serde(default)]
-    pub created_at: Option<String>,
-    /// True when the payload was cut to fit the response budget.
-    #[serde(default)]
-    pub payload_truncated: bool,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-impl CitationCheckRun {
-    /// How many citations got this verdict. Zero when none did.
-    #[must_use]
-    pub fn verdict_count(&self, verdict: &str) -> u64 {
-        self.verdict_counts
-            .get(verdict)
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
+response_struct! {
+    /// How far a run has got.
+    CheckProgress {
+        /// Citations found in the text.
+        opt citations_total: u64,
+        /// Citations checked so far.
+        opt citations_checked: u64,
+        /// Distinct citations found.
+        opt unique_citations_total: u64,
     }
 }
 
-impl_extras!(
-    CheckProgress,
-    ReasonCount,
-    UniqueCitation,
-    MatchedDecision,
-    Finding,
-    CitationCheckRun,
-);
+response_struct! {
+    /// How many citations ended in one reason category.
+    ReasonCount {
+        /// The reason category.
+        opt category: String,
+        /// How many citations.
+        opt count: u64,
+    }
+}
+
+response_struct! {
+    /// One distinct citation, with all its spellings in the text.
+    UniqueCitation {
+        /// What the key is built from.
+        opt key_basis: String,
+        /// The matched artifact, if any.
+        opt target_artifact_id: String,
+        /// The canonical form.
+        opt canonical: String,
+        /// Every spelling found in the text.
+        list spellings: String,
+        /// How often it occurs.
+        opt occurrences: u64,
+        /// The verdict.
+        opt verdict: Open<Verdict>,
+        /// A decision or a statute.
+        opt reference_type: Open<ReferenceType>,
+    }
+}
+
+response_struct! {
+    /// The decision a finding matched in the corpus.
+    MatchedDecision {
+        /// The artifact id.
+        req artifact_id: String,
+        /// The ECLI.
+        opt ecli: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date.
+        opt date: String,
+    }
+}
+
+response_struct! {
+    /// What the check could read to decide a subdivision such as an Absatz.
+    CheckScope {
+        /// The subdivision.
+        opt subdivision: String,
+        /// Whether the article text was available.
+        opt article_text_available: bool,
+        /// Whether the article text was read.
+        opt article_text_read: bool,
+        /// The court short form.
+        opt court: String,
+    }
+}
+
+response_struct! {
+    /// The evidence behind a verdict.
+    Evidence {
+        /// The reason.
+        opt reason: String,
+        /// How strong the match is.
+        opt match_strength: String,
+        /// Where the citation date came from.
+        opt citation_date_source: String,
+    }
+}
+
+response_struct! {
+    /// One citation found in the text, with its verdict.
+    Finding {
+        /// The finding id.
+        req id: String,
+        /// The text as written.
+        opt raw_text: String,
+        /// The canonical form.
+        opt canonical: String,
+        /// A decision or a statute.
+        #[serde(rename = "type")]
+        opt reference_type: Open<ReferenceType>,
+        /// The role of the citation in the text.
+        opt role: String,
+        /// The verdict.
+        opt verdict: Open<Verdict>,
+        /// The status of the external check.
+        opt external_status: String,
+        /// Where `raw_text` starts in the submitted text, in Unicode code points, not bytes.
+        opt start_offset: u64,
+        /// Where `raw_text` ends, in Unicode code points, not bytes.
+        opt end_offset: u64,
+        /// The index of this occurrence among the equal citations.
+        opt occurrence_index: u64,
+        /// The API has always sent `null`, so the type stays `Value` until a sample exists.
+        opt confidence: Value,
+        /// The matched decision.
+        opt matched_decision: MatchedDecision,
+        /// The result of the subdivision check.
+        opt subdivision_check: String,
+        /// A German advisory about the subdivision.
+        opt subdivision_advisory: String,
+        /// What the check could read.
+        opt check_scope: CheckScope,
+        /// A German advisory about ambiguity.
+        opt ambiguity_advisory: String,
+        /// The API has always sent `null`, so the type stays `Value` until a sample exists.
+        opt coverage: Value,
+        /// The API has always sent `null`, so the type stays `Value` until a sample exists.
+        opt coverage_boundary: Value,
+        /// A German advisory about coverage.
+        opt coverage_advisory: String,
+        /// The evidence behind the verdict.
+        opt evidence: Evidence,
+        /// When the verdict was disputed.
+        opt disputed_at: String,
+    }
+}
+
+impl Finding {
+    /// The text this finding covers, cut from the text you submitted.
+    ///
+    /// Offsets count Unicode code points, not bytes, so this walks characters. It returns `None`
+    /// when the finding has no offsets or they are empty.
+    #[must_use]
+    pub fn excerpt(&self, text: &str) -> Option<String> {
+        slice_code_points(text, self.start_offset?, self.end_offset?)
+    }
+}
+
+response_struct! {
+    /// What extraction found and dropped.
+    Extraction {
+        /// Candidates detected.
+        opt detected: u64,
+        /// Candidates dropped.
+        opt dropped: u64,
+        /// Dropped as unreadable.
+        opt dropped_unreadable: u64,
+        /// Dropped as truncated.
+        opt dropped_truncation: u64,
+        /// Dropped for a trailing noun.
+        opt dropped_trailing_noun: u64,
+        /// Dropped for a stacked subdivision.
+        opt dropped_stacked_subdivision: u64,
+        /// Dropped as a refused collision.
+        opt dropped_refused_collision: u64,
+        /// Drops by token. The API has never sent an element, so the element type stays `Value`.
+        list dropped_by_token: Value,
+        /// The unreadable texts. The API has never sent an element, so the element type stays
+        /// `Value`.
+        list dropped_unreadable_texts: Value,
+        /// Refused collisions. The API has never sent an element, so the element type stays `Value`.
+        list refused_contract_collision: Value,
+        /// Citations that cannot be verified.
+        opt not_verifiable: u64,
+        /// Those, by type. The API has never sent an element, so the element type stays `Value`.
+        list not_verifiable_by_type: Value,
+        /// Possible citations that were not parsed.
+        opt possible_citations_unparsed: u64,
+        /// Those texts. The API has never sent an element, so the element type stays `Value`.
+        list possible_citations_unparsed_texts: Value,
+    }
+}
+
+response_struct! {
+    /// A citation check run: the answer of both `create` and `get`.
+    CitationCheckRun {
+        /// The run id.
+        req id: String,
+        /// The state of the run.
+        opt status: Open<RunStatus>,
+        /// Where the text came from: `text` or `document`.
+        opt source: String,
+        /// How far the run has got.
+        opt progress: CheckProgress,
+        /// How many distinct citations got each verdict, keyed by the verdict as the server spelled
+        /// it. Read it with [`CitationCheckRun::verdict_count`].
+        dflt verdict_counts: BTreeMap<String, u64>,
+        /// Whether the run is partial.
+        opt partial: bool,
+        /// Citations without a final verdict.
+        opt unverified_count: u64,
+        /// Counts by reason category.
+        list reason_counts: ReasonCount,
+        /// The distinct citations.
+        list unique_citations: UniqueCitation,
+        /// What extraction found and dropped.
+        opt extraction: Extraction,
+        /// Notes. The API has never sent an element, so the element type stays `Value`.
+        list notes: Value,
+        /// Why findings are not served.
+        opt findings_unavailable_reason: String,
+        /// When findings were purged.
+        opt findings_purged_at: String,
+        /// One finding per citation found.
+        list findings: Finding,
+        /// When the run was submitted.
+        opt submitted_at: String,
+        /// When the run completed.
+        opt completed_at: String,
+        /// When the run was created.
+        opt created_at: String,
+        /// True when the payload was cut to fit the response budget.
+        opt payload_truncated: bool,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
+}
+
+impl CitationCheckRun {
+    /// How many distinct citations got a verdict. `0` when none did.
+    #[must_use]
+    pub fn verdict_count(&self, verdict: Verdict) -> u64 {
+        self.verdict_counts
+            .get(verdict.as_str())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The findings grouped by verdict, unknown verdicts included. A finding with no verdict is left
+    /// out.
+    ///
+    /// ```
+    /// # fn run(run: klaracase::CitationCheckRun) {
+    /// use klaracase::Verdict;
+    /// for (verdict, findings) in run.findings_by_verdict() {
+    ///     println!("{verdict}: {}", findings.len());
+    /// }
+    /// let missing = run.findings_by_verdict().remove(&Verdict::NotFound.into());
+    /// # let _ = missing;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn findings_by_verdict(&self) -> BTreeMap<Open<Verdict>, Vec<&Finding>> {
+        let mut groups: BTreeMap<Open<Verdict>, Vec<&Finding>> = BTreeMap::new();
+        for finding in &self.findings {
+            if let Some(verdict) = &finding.verdict {
+                groups.entry(verdict.clone()).or_default().push(finding);
+            }
+        }
+        groups
+    }
+}
 
 /// The citation check operations. Get it with [`Klaracase::citation_checks`].
 #[derive(Debug, Clone, Copy)]
@@ -413,7 +375,7 @@ impl CitationChecks<'_> {
     /// because both guarantee that nothing ran. A dropped connection is not retried; repeating the
     /// call by hand is free in the same period.
     ///
-    /// ```no_run
+    /// use klaracase::{CreateCitationCheckParams, Klaracase, Open, Verdict};
     /// use klaracase::{CreateCitationCheckParams, Klaracase, Verdict};
     ///
     /// # async fn run(client: Klaracase, text: String) -> Result<(), klaracase::Error> {
@@ -422,10 +384,10 @@ impl CitationChecks<'_> {
     ///     .create(CreateCitationCheckParams::from_text(text).with_reference_date("2024-05-01"))
     ///     .await?;
     /// for finding in &run.findings {
-    ///     match finding.verdict.as_str() {
-    ///         Verdict::VERIFIED_CORPUS => println!("exists: {}", finding.canonical),
-    ///         Verdict::NOT_FOUND => println!("not in the corpus: {}", finding.raw_text),
-    ///         other => println!("{other}: {}", finding.raw_text),
+    ///     match finding.verdict.as_ref().and_then(Open::known) {
+    ///         Some(Verdict::VerifiedCorpus) => println!("exists: {:?}", finding.canonical),
+    ///         Some(Verdict::NotFound) => println!("not in the corpus: {:?}", finding.raw_text),
+    ///         other => println!("{other:?}: {:?}", finding.raw_text),
     ///     }
     /// }
     /// # Ok(()) }

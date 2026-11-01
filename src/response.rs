@@ -80,14 +80,3 @@ pub trait Extras {
     /// Keys the server sent that this crate does not model.
     fn extra(&self) -> &Map<String, Value>;
 }
-
-macro_rules! impl_extras {
-    ($($ty:ty),+ $(,)?) => {
-        $(impl $crate::response::Extras for $ty {
-            fn extra(&self) -> &serde_json::Map<String, serde_json::Value> {
-                &self.extra
-            }
-        })+
-    };
-}
-pub(crate) use impl_extras;

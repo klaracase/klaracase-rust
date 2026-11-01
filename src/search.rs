@@ -1,15 +1,15 @@
 //! Cross-type search over statutes and decisions: `GET /search`.
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::client::{Klaracase, Request};
-use crate::common::{Count, Credits};
-use crate::decisions::SearchHit;
+use crate::common::{Count, Credits, QueryExpansion, Snippet};
+use crate::decisions::DecisionHit;
 use crate::encode::Query;
 use crate::error::Error;
-use crate::response::{Response, impl_extras};
-use crate::types::{Branch, DocumentType, Mode, Statute};
+use crate::open::{Open, response_struct};
+use crate::response::Response;
+use crate::types::{ArtifactType, Branch, Confidence, DocumentType, Jurisdiction, Mode, Statute};
 
 /// Parameters of [`Klaracase::search`].
 ///
@@ -70,115 +70,109 @@ impl CrossTypeSearchParams {
     }
 }
 
-/// The two result sections.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SearchSections {
-    /// Statute hits.
-    #[serde(default)]
-    pub laws: Vec<SearchHit>,
-    /// Decision hits.
-    #[serde(default)]
-    pub decisions: Vec<SearchHit>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// One statute hit from the laws section of a cross-type search.
+    ///
+    /// The API also sends the decision-only keys (`aktenzeichen`, `court`, `date`, `document_type`
+    /// and a few more) on a law row, always `null`. They are not modelled here; they stay in `extra`.
+    LawHit {
+        /// The artifact id.
+        req id: String,
+        /// `LAW`.
+        opt artifact_type: Open<ArtifactType>,
+        /// A title for display, for example `§ 266 StGB Untreue`.
+        opt title: String,
+        /// The best passage, with `<mark>` tags.
+        opt snippet: String,
+        /// The matching passages.
+        list snippets: Snippet,
+        /// The place in the statute.
+        opt breadcrumb: String,
+        /// The abbreviation, for example `StGB`.
+        opt abbreviation: String,
+        /// The law type.
+        opt law_type: String,
+        /// The jurisdiction code.
+        opt jurisdiction: Open<Jurisdiction>,
+        /// How sure the ranker is about this hit.
+        opt confidence: Open<Confidence>,
+    }
 }
 
-/// Totals of one section.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SectionTotals {
-    /// How many passages match in this section.
-    #[serde(default)]
-    pub total_available: Option<Count>,
-    /// What `total_available` counts.
-    #[serde(default)]
-    pub total_available_basis: String,
-    /// The size of the candidate pool.
-    #[serde(default)]
-    pub candidate_pool: u64,
-    /// Whether the pool holds every match.
-    #[serde(default)]
-    pub pool_exhaustive: bool,
-    /// Whether more results exist than the section holds.
-    #[serde(default)]
-    pub truncated: bool,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The two sections of a cross-type search.
+    SearchSections {
+        /// Statute hits.
+        list laws: LawHit,
+        /// Decision hits.
+        list decisions: DecisionHit,
+    }
 }
 
-/// Totals per section.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SectionTotalsBySection {
-    /// Totals of the laws section.
-    #[serde(default)]
-    pub laws: Option<SectionTotals>,
-    /// Totals of the decisions section.
-    #[serde(default)]
-    pub decisions: Option<SectionTotals>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// Counts for one section of a cross-type search.
+    SectionTotals {
+        /// How many passages match in this section.
+        opt total_available: Count,
+        /// What `total_available` counts.
+        opt total_available_basis: String,
+        /// The size of the candidate pool.
+        opt candidate_pool: u64,
+        /// Whether the pool holds every match.
+        opt pool_exhaustive: bool,
+        /// Whether more results exist than the section holds. `None` can also mean the section
+        /// never ran.
+        opt truncated: bool,
+    }
 }
 
-/// The answer of [`Klaracase::search`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CrossTypeSearchResults {
-    /// The hits, in two sections.
-    pub sections: SearchSections,
-    /// Totals per section.
-    #[serde(default)]
-    pub section_totals: Option<SectionTotalsBySection>,
-    /// The limit per section.
-    #[serde(default)]
-    pub limit: u64,
-    /// How many passages match across both sections.
-    #[serde(default)]
-    pub total_available: Option<Count>,
-    /// What `total_available` counts.
-    #[serde(default)]
-    pub total_available_basis: String,
-    /// Whether the pools hold every match.
-    #[serde(default)]
-    pub pool_exhaustive: bool,
-    /// Whether more results exist than the sections hold.
-    #[serde(default)]
-    pub truncated: bool,
-    /// The retrieval mode used.
-    #[serde(default)]
-    pub mode: String,
-    /// What the server added to the query, and why.
-    #[serde(default)]
-    pub query_expansion: Value,
-    /// Decisions that many hits cite.
-    #[serde(default)]
-    pub frequently_cited_by_results: Vec<Value>,
-    /// Norms that many decision hits cite.
-    #[serde(default)]
-    pub norms_cited_by_decision_results: Vec<Value>,
-    /// The confidence of the best hit.
-    #[serde(default)]
-    pub top_confidence: Option<String>,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The per-section counts of a cross-type search.
+    SectionTotalsBySection {
+        /// Totals of the laws section.
+        opt laws: SectionTotals,
+        /// Totals of the decisions section.
+        opt decisions: SectionTotals,
+    }
 }
 
-impl_extras!(
-    SearchSections,
-    SectionTotals,
-    SectionTotalsBySection,
-    CrossTypeSearchResults
-);
+response_struct! {
+    /// The answer of [`Klaracase::search`].
+    CrossTypeSearchResults {
+        /// The hits, by section.
+        req sections: SearchSections,
+        /// Counts per section.
+        opt section_totals: SectionTotalsBySection,
+        /// The limit applied per section.
+        opt limit: u64,
+        /// How many passages match over both sections.
+        opt total_available: Count,
+        /// What `total_available` counts.
+        opt total_available_basis: String,
+        /// Whether the pools hold every match.
+        opt pool_exhaustive: bool,
+        /// Whether more results exist than the sections hold.
+        opt truncated: bool,
+        /// The retrieval mode used.
+        opt mode: Open<Mode>,
+        /// What the server added to the query, and why.
+        opt query_expansion: QueryExpansion,
+        /// Decisions that many hits cite. The API has never sent an element, so the element type
+        /// stays `Value` until a sample exists.
+        list frequently_cited_by_results: Value,
+        /// Norms that the decision hits cite. The API has never sent an element, so the element type
+        /// stays `Value` until a sample exists.
+        list norms_cited_by_decision_results: Value,
+        /// The confidence of the best hit.
+        opt top_confidence: Open<Confidence>,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
+}
 
 impl Klaracase {
     /// Searches statutes and decisions together. `GET /search`. One credit per distinct query and

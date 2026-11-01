@@ -17,7 +17,7 @@ async fn main() -> Result<(), klaracase::Error> {
         .await?;
     println!(
         "coverage: {} courts, API release {:?}, cost {:?}",
-        coverage.courts_total,
+        coverage.courts_total.unwrap_or(0),
         coverage.meta.api_release,
         coverage.credits.as_ref().and_then(|c| c.cost),
     );
@@ -34,8 +34,8 @@ async fn main() -> Result<(), klaracase::Error> {
         .await?;
     println!(
         "court_name facets: {} values, BGH count {:?}",
-        facets.total_values,
-        facets.count("BGH")
+        facets.total_values.unwrap_or(0),
+        facets.values.get("BGH").map(|count| count.value)
     );
     Ok(())
 }

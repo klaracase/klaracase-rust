@@ -625,6 +625,7 @@ dependencies = [
 name = "klaracase"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "log",
  "percent-encoding",
  "reqwest",

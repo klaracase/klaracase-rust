@@ -228,10 +228,15 @@ pub enum Error {
     Timeout(#[source] reqwest::Error),
 
     /// A 2xx answer whose body could not be read as the expected JSON.
+    ///
+    /// The call may have been charged, so the body is kept: `body` holds the first 1,000
+    /// characters of what the server sent.
     #[error("could not decode the answer (status {status}): {source}")]
     Decode {
         /// The HTTP status of the answer.
         status: u16,
+        /// The first 1,000 characters of the body, so a paid answer is not lost.
+        body: String,
         /// The JSON error.
         #[source]
         source: serde_json::Error,
@@ -249,14 +254,14 @@ pub enum Error {
 
     /// [`wait_until_ready`](crate::CitationCheckDocuments::wait_until_ready) saw the upload end in
     /// `failed`. [`DocumentReceipt::error_code`] names the reason.
-    #[error("document processing failed: {}", .receipt.error_code.as_deref().unwrap_or("unknown"))]
+    #[error("document processing failed: {}", .receipt.error_code_text().unwrap_or("unknown"))]
     DocumentFailed {
         /// The last receipt.
         receipt: Box<DocumentReceipt>,
     },
 
     /// [`wait_until_ready`](crate::CitationCheckDocuments::wait_until_ready) ran out of time.
-    #[error("document was not ready in time (last status: {})", .receipt.status)]
+    #[error("document was not ready in time (last status: {})", .receipt.status_text())]
     DocumentTimeout {
         /// The last receipt.
         receipt: Box<DocumentReceipt>,
@@ -291,7 +296,7 @@ impl Error {
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Configuration { code, .. } => Some(code),
-            Self::DocumentFailed { receipt } => receipt.error_code.as_deref(),
+            Self::DocumentFailed { receipt } => receipt.error_code_text(),
             Self::DocumentTimeout { .. } => Some("wait_timeout"),
             other => other.problem().map(|problem| problem.code.as_str()),
         }
@@ -340,6 +345,18 @@ impl Error {
             },
             503 => Self::ServiceUnavailable(problem),
             _ => Self::Api(problem),
+        }
+    }
+
+    /// A 2xx answer that does not decode. Keeps the status and the start of the body.
+    pub(crate) fn decode(status: u16, body: &[u8], source: serde_json::Error) -> Self {
+        Self::Decode {
+            status,
+            body: String::from_utf8_lossy(body)
+                .chars()
+                .take(DETAIL_LIMIT)
+                .collect(),
+            source,
         }
     }
 

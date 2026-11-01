@@ -1,13 +1,14 @@
 //! Data packages: `POST /datapackages`.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::client::{Klaracase, Request};
 use crate::common::Credits;
 use crate::decisions::CitationEdge;
 use crate::error::Error;
-use crate::response::{Response, impl_extras};
+use crate::open::{Open, response_struct};
+use crate::response::Response;
+use crate::types::{Jurisdiction, TextMode};
 
 /// Parameters of [`Datapackages::create`].
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -53,110 +54,101 @@ impl CreateDatapackageParams {
     }
 }
 
-/// One decision in a data package.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PackageDecision {
-    /// The artifact id.
-    #[serde(default)]
-    pub id: String,
-    /// The Aktenzeichen.
-    #[serde(default)]
-    pub aktenzeichen: String,
-    /// The court short form.
-    #[serde(default)]
-    pub court: String,
-    /// The decision date.
-    #[serde(default)]
-    pub date: Option<String>,
-    /// The document type.
-    #[serde(default)]
-    pub document_type: Option<String>,
-    /// The ECLI.
-    #[serde(default)]
-    pub ecli: Option<String>,
-    /// The jurisdiction code.
-    #[serde(default)]
-    pub jurisdiction: Option<String>,
-    /// The excerpt. With `full_text` the text is under another key, kept in `extra`.
-    #[serde(default)]
-    pub excerpt: Option<String>,
-    /// Where the excerpt comes from, for example `document_start`.
-    #[serde(default)]
-    pub excerpt_span: Option<String>,
-    /// The length of the whole text.
-    #[serde(default)]
-    pub text_length: u64,
-    /// True when the served text is shorter than the decision.
-    #[serde(default)]
-    pub truncated: bool,
-    /// Whether the later history was checked. It is never promised.
-    #[serde(default)]
-    pub fortgeltung_checked: bool,
-    /// The German note about Fortgeltung.
-    #[serde(default)]
-    pub fortgeltung_note: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// One decision in a data package.
+    PackageDecision {
+        /// The artifact id.
+        req id: String,
+        /// The Aktenzeichen.
+        opt aktenzeichen: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date.
+        opt date: String,
+        /// The document type.
+        opt document_type: String,
+        /// The ECLI.
+        opt ecli: String,
+        /// The jurisdiction code.
+        opt jurisdiction: Open<Jurisdiction>,
+        /// The text: an excerpt, or the full text when `full_text` was set.
+        opt excerpt: String,
+        /// Which part of the decision `excerpt` comes from, for example `document_start`.
+        opt excerpt_span: String,
+        /// The length of the whole text in characters.
+        opt text_length: u64,
+        /// True when `excerpt` is shorter than the decision.
+        opt truncated: bool,
+        /// Whether the later history was checked. It is never promised.
+        opt fortgeltung_checked: bool,
+        /// The German note about Fortgeltung.
+        opt fortgeltung_note: String,
+    }
 }
 
-/// The answer of [`Datapackages::create`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Datapackage {
-    /// The decisions, in the order you asked.
-    #[serde(default)]
-    pub decisions: Vec<PackageDecision>,
-    /// The outgoing citation edges of those decisions.
-    #[serde(default)]
-    pub citation_edges: Vec<CitationEdge>,
-    /// Per source decision, how many edges exist and how many are included.
-    #[serde(default)]
-    pub edge_accounting: Vec<Value>,
-    /// Cap on resolved targets per source.
-    #[serde(default)]
-    pub per_source_resolved_target_cap: u64,
-    /// Cap on unresolved edge rows per source.
-    #[serde(default)]
-    pub per_source_unresolved_edge_row_cap: u64,
-    /// How many ids you sent.
-    #[serde(default)]
-    pub requested: u64,
-    /// How many decisions the package includes.
-    #[serde(default)]
-    pub included: u64,
-    /// How many duplicate ids collapsed.
-    #[serde(default)]
-    pub deduped: u64,
-    /// `excerpt` or `full_text`.
-    #[serde(default)]
-    pub text_mode: String,
-    /// The per-decision text cap applied.
-    #[serde(default)]
-    pub max_chars: u64,
-    /// Whether any text was cut.
-    #[serde(default)]
-    pub truncated: bool,
-    /// True when the payload was cut to fit the response budget.
-    #[serde(default)]
-    pub payload_truncated: bool,
-    /// When the package was assembled.
-    #[serde(default)]
-    pub assembled_at: Option<String>,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// How many edges of one decision the package holds and how many exist.
+    EdgeAccounting {
+        /// The decision the edges start at.
+        opt from_artifact_id: String,
+        /// What the counts count, for example `edge_rows`.
+        opt unit: String,
+        /// All edges.
+        opt edges_total: u64,
+        /// Edges in the package.
+        opt edges_included: u64,
+        /// Resolved edges in the package.
+        opt edges_resolved_included: u64,
+        /// Unresolved edges in the package.
+        opt edges_unresolved_included: u64,
+        /// All resolved edges.
+        opt edges_resolved_total: u64,
+        /// All unresolved edges.
+        opt edges_unresolved_total: u64,
+        /// Distinct resolved targets in the package.
+        opt targets_resolved_included: u64,
+        /// All distinct resolved targets.
+        opt targets_resolved_total: u64,
+    }
 }
 
-impl_extras!(PackageDecision, Datapackage);
+response_struct! {
+    /// The answer of [`Datapackages::create`].
+    Datapackage {
+        /// The decisions.
+        list decisions: PackageDecision,
+        /// The citation edges that start at those decisions.
+        list citation_edges: CitationEdge,
+        /// Per decision: how many edges the package holds and how many exist.
+        list edge_accounting: EdgeAccounting,
+        /// Cap on resolved targets per source decision.
+        opt per_source_resolved_target_cap: u64,
+        /// Cap on unresolved edge rows per source decision.
+        opt per_source_unresolved_edge_row_cap: u64,
+        /// How many ids you asked for.
+        opt requested: u64,
+        /// How many decisions the package holds.
+        opt included: u64,
+        /// How many ids were duplicates.
+        opt deduped: u64,
+        /// Excerpts or full text.
+        opt text_mode: Open<TextMode>,
+        /// The per-decision text cap.
+        opt max_chars: u64,
+        /// Whether any decision text was cut.
+        opt truncated: bool,
+        /// True when the payload was cut to fit the response budget.
+        opt payload_truncated: bool,
+        /// When the package was assembled.
+        opt assembled_at: String,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
+}
 
 /// The data package operations. Get it with [`Klaracase::datapackages`].
 #[derive(Debug, Clone, Copy)]
@@ -189,7 +181,7 @@ impl Datapackages<'_> {
     ///         ..CreateDatapackageParams::new(["1 StR 185/01", "VIII ZR 271/17"])
     ///     })
     ///     .await?;
-    /// println!("{} of {} included", package.included, package.requested);
+    /// println!("{:?} of {:?} included", package.included, package.requested);
     /// # Ok(()) }
     /// ```
     pub async fn create(

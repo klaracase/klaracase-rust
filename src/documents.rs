@@ -2,111 +2,87 @@
 
 use std::time::Duration;
 
-use reqwest::Method;
-use reqwest::multipart::Part;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use bytes::Bytes;
 
 use crate::client::{Body, Klaracase, Request};
 use crate::common::Credits;
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
-use crate::response::{Response, impl_extras};
+use crate::open::{Open, response_struct};
+use crate::response::Response;
+use crate::types::{DocumentErrorCode, DocumentStatus};
+use reqwest::Method;
+use reqwest::multipart::Part;
 
-/// The receipt of an upload. It never holds the extracted text.
-///
-/// The `status` is one of the [`DocumentStatus`] constants. Unknown values are kept as they are.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DocumentReceipt {
-    /// The upload id. Pass it as `document_id` to a citation check.
-    pub id: String,
-    /// The file name you sent.
-    #[serde(default)]
-    pub filename: String,
-    /// The detected format: `pdf`, `docx`, `md` or `txt`.
-    #[serde(default)]
-    pub format: String,
-    /// See [`DocumentStatus`].
-    #[serde(default)]
-    pub status: String,
-    /// Characters of extracted text. `None` until extraction ends.
-    #[serde(default)]
-    pub char_count: Option<u64>,
-    /// Pages of a PDF.
-    #[serde(default)]
-    pub page_count: Option<u64>,
-    /// Pages of a PDF without a text layer.
-    #[serde(default)]
-    pub pages_without_text_layer: Option<u64>,
-    /// The longest text one check takes.
-    #[serde(default)]
-    pub check_max_chars: Option<u64>,
-    /// Credits a check of this upload costs. `None` above 20,000 characters.
-    #[serde(default)]
-    pub quoted_credits: Option<u64>,
-    /// Why extraction failed, for example `encrypted_pdf`.
-    #[serde(default)]
-    pub error_code: Option<String>,
-    /// When an unused upload expires.
-    #[serde(default)]
-    pub expires_at: Option<String>,
-    /// When the upload was created.
-    #[serde(default)]
-    pub created_at: Option<String>,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The receipt of an upload. It never holds the extracted text.
+    DocumentReceipt {
+        /// The upload id. Pass it as `document_id` to a citation check.
+        req id: String,
+        /// The file name you sent.
+        opt filename: String,
+        /// The detected format: `pdf`, `docx`, `md` or `txt`.
+        opt format: String,
+        /// The state of the upload.
+        opt status: Open<DocumentStatus>,
+        /// Characters of extracted text. `None` until extraction ends.
+        opt char_count: u64,
+        /// Pages of a PDF.
+        opt page_count: u64,
+        /// Pages of a PDF without a text layer.
+        opt pages_without_text_layer: u64,
+        /// The longest text one check takes.
+        opt check_max_chars: u64,
+        /// Credits a check of this upload costs. `None` above 20,000 characters.
+        opt quoted_credits: u64,
+        /// Why extraction failed.
+        opt error_code: Open<DocumentErrorCode>,
+        /// When an unused upload expires.
+        opt expires_at: String,
+        /// When the upload was created.
+        opt created_at: String,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
 }
 
 impl DocumentReceipt {
     /// True when the text is extracted and a check can consume the upload.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.status == DocumentStatus::READY
+        self.status == Some(Open::Known(DocumentStatus::Ready))
     }
 
     /// True when extraction failed. [`error_code`](Self::error_code) says why.
     #[must_use]
     pub fn is_failed(&self) -> bool {
-        self.status == DocumentStatus::FAILED
+        self.status == Some(Open::Known(DocumentStatus::Failed))
+    }
+
+    /// The failure reason as the server spelled it, if the upload failed.
+    #[must_use]
+    pub fn error_code_text(&self) -> Option<&str> {
+        self.error_code.as_ref().map(Open::as_str)
+    }
+
+    /// The status as the server spelled it, or `unknown` when the key was absent.
+    #[must_use]
+    pub fn status_text(&self) -> &str {
+        self.status.as_ref().map_or("unknown", Open::as_str)
     }
 }
 
-/// The statuses of an upload.
-///
-/// `ocr_pending` is not terminal: keep polling.
-#[derive(Debug, Clone, Copy)]
-pub struct DocumentStatus;
-
-impl DocumentStatus {
-    /// The file arrived.
-    pub const UPLOADED: &'static str = "uploaded";
-    /// The text is being extracted.
-    pub const EXTRACTING: &'static str = "extracting";
-    /// Text recognition on scanned pages is pending.
-    pub const OCR_PENDING: &'static str = "ocr_pending";
-    /// The text is extracted.
-    pub const READY: &'static str = "ready";
-    /// Extraction failed.
-    pub const FAILED: &'static str = "failed";
-}
-
-impl_extras!(DocumentReceipt);
-
 /// Parameters of [`CitationCheckDocuments::upload`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The content is reference counted, so a retry of the upload does not copy the buffer.
+#[derive(Clone, PartialEq, Eq)]
 pub struct UploadParams {
     /// The file content. PDF, DOCX, Markdown or plain text, up to 25 MB.
-    pub bytes: Vec<u8>,
+    bytes: Bytes,
     /// The file name, for example `schriftsatz.pdf`.
     pub filename: String,
     /// The media type, for example `application/pdf`.
@@ -117,7 +93,7 @@ impl UploadParams {
     /// Creates upload parameters.
     #[must_use]
     pub fn new(
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<Bytes>,
         filename: impl Into<String>,
         content_type: impl Into<String>,
     ) -> Self {
@@ -126,6 +102,22 @@ impl UploadParams {
             filename: filename.into(),
             content_type: content_type.into(),
         }
+    }
+
+    /// The file content.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl std::fmt::Debug for UploadParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadParams")
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .field("filename", &self.filename)
+            .field("content_type", &self.content_type)
+            .finish()
     }
 }
 

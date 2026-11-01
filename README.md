@@ -59,7 +59,7 @@ A response dereferences to its typed body, so `found.results` works. `found.meta
 ## Check the citations in a text
 
 ```rust,no_run
-use klaracase::{CreateCitationCheckParams, Klaracase, Verdict};
+use klaracase::{CreateCitationCheckParams, Klaracase, Open, Verdict};
 
 #[tokio::main]
 async fn main() -> Result<(), klaracase::Error> {
@@ -73,12 +73,13 @@ async fn main() -> Result<(), klaracase::Error> {
         .await?;
 
     for finding in &run.findings {
-        match finding.verdict.as_str() {
-            Verdict::VERIFIED_CORPUS => println!("exists in the corpus: {}", finding.canonical),
-            Verdict::NOT_FOUND => println!("not found in the corpus: {}", finding.raw_text),
-            Verdict::OUT_OF_COVERAGE => println!("outside the corpus: {}", finding.raw_text),
-            Verdict::AMBIGUOUS => println!("ambiguous: {}", finding.raw_text),
-            other => println!("{other}: {}", finding.raw_text),
+        let text = finding.raw_text.as_deref().unwrap_or("-");
+        match finding.verdict.as_ref().and_then(Open::known) {
+            Some(Verdict::VerifiedCorpus) => println!("exists in the corpus: {text}"),
+            Some(Verdict::NotFound) => println!("not found in the corpus: {text}"),
+            Some(Verdict::OutOfCoverage) => println!("outside the corpus: {text}"),
+            Some(Verdict::Ambiguous) => println!("ambiguous: {text}"),
+            other => println!("{other:?}: {text}"),
         }
     }
     println!("{} unique citations", run.unique_citations.len());
@@ -140,7 +141,7 @@ async fn main() {
     let client = Klaracase::from_env().expect("token");
 
     match client.decisions().get("1 StR 185/01", GetDecisionParams::default()).await {
-        Ok(decision) => println!("{} chars", decision.text_length),
+        Ok(decision) => println!("{:?} chars", decision.text_length),
         Err(Error::NotFound(problem)) => println!("no such decision: {}", problem.detail),
         Err(Error::InsufficientCredits { cost, balance, .. }) => {
             println!("the call costs {cost:?} credits, the balance is {balance:?}");

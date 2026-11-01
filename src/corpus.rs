@@ -1,13 +1,15 @@
 //! Corpus facts: `GET /corpus/coverage` and `GET /corpus/facets/{field}`. Both are free.
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::client::{Klaracase, Request};
 use crate::common::{Count, Credits};
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
-use crate::response::{Response, impl_extras};
+use crate::open::response_struct;
+use crate::response::Response;
 use crate::types::{Branch, FacetField, FacetType};
 
 /// Parameters of [`Corpus::coverage`].
@@ -28,97 +30,235 @@ impl CoverageParams {
     }
 }
 
-/// One court in the coverage report.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CourtCoverage {
-    /// The court short form.
-    #[serde(default)]
-    pub court: String,
-    /// The Gerichtsbarkeit.
-    #[serde(default)]
-    pub branch: Option<String>,
-    /// How many decisions.
-    #[serde(default)]
-    pub count: Option<Count>,
-    /// The earliest decision month, for example `1950-10`.
-    #[serde(default)]
-    pub earliest: Option<String>,
-    /// The latest decision month.
-    #[serde(default)]
-    pub latest: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// One court in the coverage report.
+    CourtCoverage {
+        /// The court short form.
+        req court: String,
+        /// The Gerichtsbarkeit.
+        opt branch: String,
+        /// How many decisions.
+        opt count: Count,
+        /// The earliest decision month, for example `1950-10`.
+        opt earliest: String,
+        /// The latest decision month.
+        opt latest: String,
+        /// The year the court was founded, the floor for its dates.
+        opt court_founding_year: u64,
+        /// Where the founding year comes from.
+        opt court_founding_basis: String,
+        /// Whether the corpus holds dates below that floor.
+        opt has_dates_below_floor: bool,
+    }
 }
 
-/// One branch in the coverage report.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BranchCoverage {
-    /// The Gerichtsbarkeit slug.
-    #[serde(default)]
-    pub branch: String,
-    /// How many decisions.
-    #[serde(default)]
-    pub count: Option<Count>,
-    /// The earliest decision month.
-    #[serde(default)]
-    pub earliest: Option<String>,
-    /// The latest decision month.
-    #[serde(default)]
-    pub latest: Option<String>,
-    /// The busiest courts of the branch.
-    #[serde(default)]
-    pub top_courts: Vec<CourtCoverage>,
-    /// Keys this crate does not model, such as `instance_mix`.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// How the decisions of a branch spread over instances.
+    InstanceMix {
+        /// Federal courts.
+        opt federal: Count,
+        /// Appellate courts.
+        opt appellate: Count,
+        /// First-instance and regional courts.
+        opt first_instance_and_regional: Count,
+        /// Everything else.
+        opt other: Count,
+        /// A note in German with the shares.
+        opt note: String,
+    }
 }
 
-/// The answer of [`Corpus::coverage`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CorpusCoverage {
-    /// How many decisions the corpus holds.
-    #[serde(default)]
-    pub total_decisions: Option<Count>,
-    /// The branch rollup. It is never capped.
-    #[serde(default)]
-    pub branches: Vec<BranchCoverage>,
-    /// The busiest courts.
-    #[serde(default)]
-    pub courts: Vec<CourtCoverage>,
-    /// How many court rows this answer holds.
-    #[serde(default)]
-    pub courts_returned: u64,
-    /// How many courts exist.
-    #[serde(default)]
-    pub courts_total: u64,
-    /// A German note about the earliest decisions held per branch.
-    #[serde(default)]
-    pub corpus_floors: Option<String>,
+response_struct! {
+    /// One branch in the coverage report.
+    BranchCoverage {
+        /// The Gerichtsbarkeit slug.
+        req branch: String,
+        /// How many decisions.
+        opt count: Count,
+        /// The earliest decision month.
+        opt earliest: String,
+        /// The latest decision month.
+        opt latest: String,
+        /// The year the weakest court of the branch was founded.
+        opt court_founding_year: u64,
+        /// Where the founding year comes from.
+        opt court_founding_basis: String,
+        /// Whether the corpus holds dates below that floor.
+        opt has_dates_below_floor: bool,
+        /// The split by instance.
+        opt instance_mix: InstanceMix,
+        /// The busiest courts of the branch.
+        list top_courts: CourtCoverage,
+    }
+}
+
+response_struct! {
+    /// One ingestion range: what the corpus holds for a court or bucket.
+    CoverageRange {
+        /// The bucket name, for example `BGH_STRAFRECHT`.
+        opt bucket: String,
+        /// The court short form.
+        opt court: String,
+        /// A label for display.
+        opt label: String,
+        /// The first date the range covers.
+        opt from: String,
+        /// The last date the range covers. `None` is an open end, not an unknown one.
+        opt until: String,
+        /// The sources the range comes from.
+        list sources: String,
+        /// Whether the range is exhaustive.
+        opt exhaustive: bool,
+        /// Whether scanned pages went through text recognition.
+        opt ocr: bool,
+        /// A note.
+        opt note: String,
+        /// The earliest decision the corpus holds in this range.
+        opt holdings_earliest: String,
+    }
+}
+
+response_struct! {
     /// The ingestion boundary every `out_of_coverage` verdict is decided against.
-    #[serde(default)]
-    pub coverage_ranges: Value,
-    /// When the figures were computed.
-    #[serde(default)]
-    pub as_of: Option<String>,
-    /// A note about known blind spots of filters.
-    #[serde(default)]
-    pub filter_coverage_caveats: Option<String>,
-    /// The statutes behind the citation check.
-    #[serde(default)]
-    pub law_coverage: Value,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    CoverageRanges {
+        /// A note.
+        opt note: String,
+        /// What the ranges cover.
+        opt scope: String,
+        /// When the ranges were verified.
+        opt verified_at: String,
+        /// The ranges.
+        list ranges: CoverageRange,
+    }
+}
+
+response_struct! {
+    /// Which statutes the corpus does not hold.
+    LawCoverage {
+        /// A note.
+        opt note: String,
+        /// EU law the corpus holds.
+        list eu: String,
+        /// International law the corpus holds.
+        list international: String,
+    }
+}
+
+response_struct! {
+    /// The answer of [`Corpus::coverage`].
+    CorpusCoverage {
+        /// All decisions.
+        opt total_decisions: Count,
+        /// Per branch.
+        list branches: BranchCoverage,
+        /// Per court, busiest first.
+        list courts: CourtCoverage,
+        /// How many court rows this answer holds.
+        opt courts_returned: u64,
+        /// How many courts exist.
+        opt courts_total: u64,
+        /// A note in German about the earliest decisions held per branch.
+        opt corpus_floors: String,
+        /// The ingestion boundary.
+        opt coverage_ranges: CoverageRanges,
+        /// When the figures were computed.
+        opt as_of: String,
+        /// Caveats for filters.
+        opt filter_coverage_caveats: String,
+        /// Statute coverage.
+        opt law_coverage: LawCoverage,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
+}
+
+/// Facet values with their counts, in the order the server sent them (busiest first).
+///
+/// A `BTreeMap` would sort by name and lose that order. Use [`FacetValues::get`] to look one up and
+/// [`FacetValues::iter`] to walk them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FacetValues(pub Vec<(String, Count)>);
+
+impl FacetValues {
+    /// The count of one facet value, or `None` when the value is absent.
+    #[must_use]
+    pub fn get(&self, value: &str) -> Option<&Count> {
+        self.0
+            .iter()
+            .find(|(name, _)| name == value)
+            .map(|(_, count)| count)
+    }
+
+    /// The values and counts in server order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Count)> {
+        self.0.iter().map(|(name, count)| (name.as_str(), count))
+    }
+
+    /// How many values this answer holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// True when the answer holds no value.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for FacetValues {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.0.iter().map(|(name, count)| (name, count)))
+    }
+}
+
+impl<'de> Deserialize<'de> for FacetValues {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let map = Map::<String, Value>::deserialize(deserializer)?;
+        map.into_iter()
+            .map(|(name, raw)| {
+                serde_json::from_value::<Count>(raw)
+                    .map(|count| (name, count))
+                    .map_err(D::Error::custom)
+            })
+            .collect::<Result<_, _>>()
+            .map(Self)
+    }
+}
+
+response_struct! {
+    /// The answer of [`Corpus::facets`].
+    Facets {
+        /// The field that was listed.
+        req field: String,
+        /// What the field applies to, for example `DECISION`.
+        opt applies_to: String,
+        /// Value to count, busiest first.
+        dflt values: FacetValues,
+        /// How many values exist.
+        opt total_values: u64,
+        /// Whether `values` was cut at `value_limit`.
+        opt truncated: bool,
+        /// The most values one answer holds.
+        opt value_limit: u64,
+        /// What the counts count.
+        opt count_basis: String,
+        /// When the figures were computed.
+        opt as_of: String,
+        /// For `cited_norms`: the canonical norm that was listed.
+        opt norm: String,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
 }
 
 /// Parameters of [`Corpus::facets`].
@@ -142,63 +282,6 @@ impl FacetsParams {
         query
     }
 }
-
-/// The answer of [`Corpus::facets`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Facets {
-    /// The field, as the server names it.
-    #[serde(default)]
-    pub field: String,
-    /// What the field applies to, for example `DECISION`.
-    #[serde(default)]
-    pub applies_to: Option<String>,
-    /// Value to count, in the order the server sent them. Each count is an object with `value` and
-    /// `is_floor`; read it with [`Facets::count`].
-    #[serde(default)]
-    pub values: Map<String, Value>,
-    /// How many values exist.
-    #[serde(default)]
-    pub total_values: u64,
-    /// Whether `values` was cut at `value_limit`.
-    #[serde(default)]
-    pub truncated: bool,
-    /// The most values one answer holds.
-    #[serde(default)]
-    pub value_limit: u64,
-    /// What the counts count.
-    #[serde(default)]
-    pub count_basis: Option<String>,
-    /// When the figures were computed.
-    #[serde(default)]
-    pub as_of: Option<String>,
-    /// For `cited_norms`: the canonical norm that was listed.
-    #[serde(default)]
-    pub norm: Option<String>,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-impl Facets {
-    /// The count of one facet value, or `None` when the value is absent or malformed.
-    #[must_use]
-    pub fn count(&self, value: &str) -> Option<Count> {
-        self.values
-            .get(value)
-            .and_then(|raw| serde_json::from_value(raw.clone()).ok())
-    }
-}
-
-impl_extras!(CourtCoverage, BranchCoverage, CorpusCoverage, Facets);
 
 /// The corpus operations. Get it with [`Klaracase::corpus`].
 #[derive(Debug, Clone, Copy)]
@@ -247,7 +330,7 @@ impl Corpus<'_> {
     ///     .corpus()
     ///     .facets(FacetField::CourtName, FacetsParams { prefix: Some("BG".into()), ..Default::default() })
     ///     .await?;
-    /// println!("{:?}", courts.count("BGH"));
+    /// println!("{:?}", courts.values.get("BGH"));
     /// # Ok(()) }
     /// ```
     pub async fn facets(

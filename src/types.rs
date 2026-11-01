@@ -1,55 +1,29 @@
-//! Closed vocabularies for request parameters.
+//! Closed vocabularies.
 //!
-//! Request parameters are typed strictly, so a typo in `mode` or `branch` is a compile error and not
-//! a 422 after a round trip. The enums are `#[non_exhaustive]`: a later release can add a value.
-//! Response fields that carry such words stay plain `String` and never fail on a new value.
+//! The first group are request vocabularies. They are typed strictly, so a typo in `mode` or
+//! `branch` is a compile error and not a 422 after a round trip. The second group are response
+//! vocabularies. Responses hold them as [`Open<E>`](crate::Open), so a value added by a later API
+//! release stays readable as the server's own string.
+//!
+//! Every enum is `#[non_exhaustive]`: a later release can add a value.
 
-use std::fmt;
+use crate::open::wire_enum;
 
-macro_rules! wire_enum {
-    ($(#[$meta:meta])* $name:ident { $($(#[$vmeta:meta])* $variant:ident => $wire:literal),+ $(,)? }) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($(#[$vmeta])* $variant),+
-        }
-
-        impl $name {
-            /// The value as it goes on the wire.
-            #[must_use]
-            pub fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $wire),+
-                }
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl std::str::FromStr for $name {
-            type Err = UnknownValue;
-
-            fn from_str(value: &str) -> Result<Self, Self::Err> {
-                match value {
-                    $($wire => Ok(Self::$variant),)+
-                    other => Err(UnknownValue { kind: stringify!($name), value: other.to_owned() }),
-                }
-            }
-        }
-    };
-}
-
-/// The error of `FromStr` for the parameter enums.
+/// The error of `FromStr` for the vocabulary enums.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("`{value}` is not a valid {kind}")]
 pub struct UnknownValue {
     kind: &'static str,
     value: String,
+}
+
+impl UnknownValue {
+    pub(crate) fn new(kind: &'static str, value: &str) -> Self {
+        Self {
+            kind,
+            value: value.to_owned(),
+        }
+    }
 }
 
 wire_enum! {
@@ -182,6 +156,171 @@ wire_enum! {
     }
 }
 
+wire_enum! {
+    /// A jurisdiction code of a law: German federal and state law, EU law, or international law.
+    Jurisdiction {
+        /// German law.
+        De => "DE",
+        /// EU law.
+        Eu => "EU",
+        /// International law.
+        Xi => "XI",
+    }
+}
+
+wire_enum! {
+    /// The verdict on one citation.
+    ///
+    /// `NotFound` means the citation was not found in the corpus. `VerifiedCorpus` shows that the
+    /// cited source exists. It does not show that a quote or a legal proposition is correct.
+    Verdict {
+        /// The cited decision or statute exists in the corpus.
+        VerifiedCorpus => "verified_corpus",
+        /// An external source confirmed the citation.
+        VerifiedExternal => "verified_external",
+        /// Not found in the corpus.
+        NotFound => "not_found",
+        /// The citation points outside what the corpus covers.
+        OutOfCoverage => "out_of_coverage",
+        /// More than one source fits.
+        Ambiguous => "ambiguous",
+        /// The citation cannot be checked.
+        Unverifiable => "unverifiable",
+        /// The source exists but a detail differs.
+        Discrepancy => "discrepancy",
+    }
+}
+
+wire_enum! {
+    /// The state of a citation check run.
+    RunStatus {
+        /// Queued.
+        Pending => "pending",
+        /// The input is being gated.
+        Gating => "gating",
+        /// Citations are being extracted.
+        Extracting => "extracting",
+        /// Citations are being resolved against the corpus.
+        Resolving => "resolving",
+        /// External sources are being checked.
+        CheckingExternal => "checking_external",
+        /// Finished.
+        Complete => "complete",
+        /// Refused.
+        Rejected => "rejected",
+        /// Ended in an error.
+        Failed => "failed",
+    }
+}
+
+wire_enum! {
+    /// The state of an uploaded document. `OcrPending` is not final.
+    DocumentStatus {
+        /// The file arrived.
+        Uploaded => "uploaded",
+        /// The text is being extracted.
+        Extracting => "extracting",
+        /// Text recognition on scanned pages is pending.
+        OcrPending => "ocr_pending",
+        /// The text is extracted.
+        Ready => "ready",
+        /// Extraction failed.
+        Failed => "failed",
+    }
+}
+
+wire_enum! {
+    /// Why extraction of an uploaded document failed.
+    DocumentErrorCode {
+        /// The text is longer than a check takes.
+        DocumentTooLong => "document_too_long",
+        /// The format is known but not supported yet.
+        UnsupportedFormatPending => "unsupported_format_pending",
+        /// The file is damaged.
+        CorruptedDocument => "corrupted_document",
+        /// The archive expands beyond a safe size.
+        ZipBombRejected => "zip_bomb_rejected",
+        /// The PDF is encrypted.
+        EncryptedPdf => "encrypted_pdf",
+        /// The PDF holds scans without a text layer.
+        ScannedPdf => "scanned_pdf",
+        /// The text layer of the PDF is garbled.
+        PdfTextGarbled => "pdf_text_garbled",
+        /// Extraction failed for another reason.
+        ExtractionFailed => "extraction_failed",
+    }
+}
+
+wire_enum! {
+    /// What a reference points at.
+    ReferenceType {
+        /// A court decision.
+        Case => "case",
+        /// A statute.
+        Statute => "statute",
+    }
+}
+
+wire_enum! {
+    /// How far a citation edge resolved.
+    ResolutionStatus {
+        /// The other end is in the corpus.
+        Resolved => "resolved",
+        /// More than one decision fits.
+        UnresolvedAmbiguous => "unresolved_ambiguous",
+        /// Resolution has not run yet.
+        UnresolvedPending => "unresolved_pending",
+        /// No decision fits.
+        UnresolvedNoMatch => "unresolved_no_match",
+        /// The other end is outside what the corpus covers.
+        UnresolvedOutOfCoverage => "unresolved_out_of_coverage",
+    }
+}
+
+wire_enum! {
+    /// The kind of a search hit.
+    ArtifactType {
+        /// A court decision.
+        Decision => "DECISION",
+        /// A statute.
+        Law => "LAW",
+    }
+}
+
+wire_enum! {
+    /// How sure the ranker is about a hit.
+    Confidence {
+        /// High.
+        High => "high",
+        /// Medium.
+        Medium => "medium",
+        /// Low.
+        Low => "low",
+    }
+}
+
+wire_enum! {
+    /// The state of a norm text.
+    Lifecycle {
+        /// The text is in force and confirmed by its source.
+        Current => "current",
+        /// The law was repealed.
+        Repealed => "repealed",
+        /// The source no longer serves the law.
+        Unconfirmed => "unconfirmed",
+    }
+}
+
+wire_enum! {
+    /// How much text a data package carries per decision.
+    TextMode {
+        /// Excerpts of about 700 characters.
+        Excerpt => "excerpt",
+        /// Whole judgments, cut at `max_chars`.
+        FullText => "full_text",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +334,15 @@ mod tests {
         );
         assert_eq!(Depth::Two.to_string(), "2");
         assert!("nope".parse::<Branch>().is_err());
+    }
+
+    #[test]
+    fn request_enums_speak_serde() {
+        assert_eq!(serde_json::to_string(&Statute::StGB).unwrap(), "\"StGB\"");
+        assert_eq!(
+            serde_json::from_str::<DocumentType>("\"Verfügung\"").unwrap(),
+            DocumentType::Verfuegung
+        );
+        assert!(serde_json::from_str::<Mode>("\"fuzzy\"").is_err());
     }
 }

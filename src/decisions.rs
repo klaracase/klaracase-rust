@@ -1,14 +1,17 @@
 //! Decisions: search, read and citation graph.
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::client::{Klaracase, Request};
-use crate::common::{Count, Credits, Snippet};
+use crate::common::{Count, Credits, QueryExpansion, Snippet};
 use crate::encode::{Query, path_segment};
 use crate::error::Error;
-use crate::response::{Response, impl_extras};
-use crate::types::{Branch, Depth, Direction, DocumentType, Mode, Statute};
+use crate::open::{Open, response_struct};
+use crate::response::Response;
+use crate::types::{
+    ArtifactType, Branch, Confidence, Depth, Direction, DocumentType, Jurisdiction, Mode,
+    ResolutionStatus, Statute,
+};
 
 /// Parameters of [`Decisions::search`].
 ///
@@ -70,125 +73,79 @@ impl SearchDecisionsParams {
     }
 }
 
-/// One search hit. Decisions and statutes share this shape; fields that do not apply are `None`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SearchHit {
-    /// The artifact id.
-    #[serde(default)]
-    pub id: String,
-    /// `DECISION` or `LAW`. Absent in a decision-only search.
-    #[serde(default)]
-    pub artifact_type: Option<String>,
-    /// The Aktenzeichen of a decision.
-    #[serde(default)]
-    pub aktenzeichen: Option<String>,
-    /// The court short form.
-    #[serde(default)]
-    pub court: Option<String>,
-    /// The decision date, `YYYY-MM-DD`.
-    #[serde(default)]
-    pub date: Option<String>,
-    /// The document type, for example `Urteil`.
-    #[serde(default)]
-    pub document_type: Option<String>,
-    /// A title for display.
-    #[serde(default)]
-    pub title: Option<String>,
-    /// The best passage, with `<mark>` tags.
-    #[serde(default)]
-    pub snippet: Option<String>,
-    /// The matching passages.
-    #[serde(default)]
-    pub snippets: Vec<Snippet>,
-    /// The title of the matching chunk, for example `Gründe`.
-    #[serde(default)]
-    pub chunk_title: Option<String>,
-    /// The Randnummer range of the matching chunk, for example `21-23`.
-    #[serde(default)]
-    pub rn_range: Option<String>,
-    /// A Fundstelle, when known.
-    #[serde(default)]
-    pub fundstelle: Option<String>,
-    /// Whether the later history of the decision was checked. It is never promised.
-    #[serde(default)]
-    pub fortgeltung_checked: Option<bool>,
-    /// The German note about Fortgeltung.
-    #[serde(default)]
-    pub fortgeltung_note: Option<String>,
-    /// Statutes only: the place in the statute.
-    #[serde(default)]
-    pub breadcrumb: Option<String>,
-    /// Statutes only: the abbreviation, for example `StGB`.
-    #[serde(default)]
-    pub abbreviation: Option<String>,
-    /// Statutes only: the law type.
-    #[serde(default)]
-    pub law_type: Option<String>,
-    /// Statutes only: the jurisdiction code.
-    #[serde(default)]
-    pub jurisdiction: Option<String>,
-    /// `high`, `medium` or `low`.
-    #[serde(default)]
-    pub confidence: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// One decision hit, from a decision search or the decisions section of a cross-type search.
+    DecisionHit {
+        /// The artifact id.
+        req id: String,
+        /// `DECISION`. Present in a cross-type search, absent in a decision-only search.
+        opt artifact_type: Open<ArtifactType>,
+        /// The Aktenzeichen.
+        opt aktenzeichen: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date, `YYYY-MM-DD`.
+        opt date: String,
+        /// The document type, for example `Urteil`.
+        opt document_type: String,
+        /// A title for display.
+        opt title: String,
+        /// The best passage, with `<mark>` tags.
+        opt snippet: String,
+        /// The matching passages.
+        list snippets: Snippet,
+        /// The title of the matching chunk, for example `Gründe`.
+        opt chunk_title: String,
+        /// The Randnummer range of the matching chunk, for example `21-23`.
+        opt rn_range: String,
+        /// A Fundstelle, when known.
+        opt fundstelle: String,
+        /// Whether the later history of the decision was checked. It is never promised.
+        opt fortgeltung_checked: bool,
+        /// The German note about Fortgeltung.
+        opt fortgeltung_note: String,
+        /// How sure the ranker is about this hit.
+        opt confidence: Open<Confidence>,
+    }
 }
 
-/// The answer of [`Decisions::search`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DecisionSearchResults {
-    /// The hits, best first.
-    #[serde(default)]
-    pub results: Vec<SearchHit>,
-    /// True when the payload was cut to fit the response budget.
-    #[serde(default)]
-    pub payload_truncated: bool,
-    /// How many passages match.
-    #[serde(default)]
-    pub total_available: Option<Count>,
-    /// What `total_available` counts.
-    #[serde(default)]
-    pub total_available_basis: String,
-    /// The size of the candidate pool.
-    #[serde(default)]
-    pub candidate_pool: u64,
-    /// Whether the pool holds every match.
-    #[serde(default)]
-    pub pool_exhaustive: bool,
-    /// Whether more results exist than this page holds.
-    #[serde(default)]
-    pub truncated: bool,
-    /// The page served.
-    #[serde(default)]
-    pub page: u64,
-    /// The limit applied.
-    #[serde(default)]
-    pub limit: u64,
-    /// The retrieval mode used.
-    #[serde(default)]
-    pub mode: String,
-    /// Decisions that many hits cite.
-    #[serde(default)]
-    pub frequently_cited_by_results: Vec<Value>,
-    /// What the server added to the query, and why.
-    #[serde(default)]
-    pub query_expansion: Value,
-    /// The confidence of the best hit.
-    #[serde(default)]
-    pub top_confidence: Option<String>,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The answer of [`Decisions::search`].
+    DecisionSearchResults {
+        /// The hits, best first.
+        list results: DecisionHit,
+        /// True when the payload was cut to fit the response budget.
+        opt payload_truncated: bool,
+        /// How many passages match.
+        opt total_available: Count,
+        /// What `total_available` counts.
+        opt total_available_basis: String,
+        /// The size of the candidate pool.
+        opt candidate_pool: u64,
+        /// Whether the pool holds every match.
+        opt pool_exhaustive: bool,
+        /// Whether more results exist than this page holds. A missing key is `None`, not `false`.
+        opt truncated: bool,
+        /// The page served.
+        opt page: u64,
+        /// The limit applied.
+        opt limit: u64,
+        /// The retrieval mode used.
+        opt mode: Open<Mode>,
+        /// Decisions that many hits cite. The API has never sent an element, so the element type
+        /// stays `Value` until a sample exists.
+        list frequently_cited_by_results: Value,
+        /// What the server added to the query, and why.
+        opt query_expansion: QueryExpansion,
+        /// The confidence of the best hit.
+        opt top_confidence: Open<Confidence>,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
 }
 
 /// Parameters of [`Decisions::get`].
@@ -221,105 +178,95 @@ impl GetDecisionParams {
     }
 }
 
-/// Metadata of a decision.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DecisionMetadata {
-    /// The document type, for example `Urteil`.
-    #[serde(default)]
-    pub document_type: Option<String>,
-    /// The ECLI, when known.
-    #[serde(default)]
-    pub ecli: Option<String>,
-    /// Every Aktenzeichen of the decision.
-    #[serde(default)]
-    pub file_numbers: Vec<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// Metadata of a decision.
+    DecisionMetadata {
+        /// The document type, for example `Urteil`.
+        opt document_type: String,
+        /// The ECLI, when known.
+        opt ecli: String,
+        /// Every Aktenzeichen of the decision.
+        list file_numbers: String,
+    }
 }
 
-/// The Randnummer range a decision holds.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AvailableRange {
-    /// First Randnummer.
-    #[serde(default)]
-    pub rn_from: Option<u64>,
-    /// Last Randnummer.
-    #[serde(default)]
-    pub rn_to: Option<u64>,
-    /// `printed` when the court printed the numbers.
-    #[serde(default)]
-    pub rn_source: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The Randnummer range a decision holds.
+    AvailableRange {
+        /// First Randnummer.
+        opt rn_from: u64,
+        /// Last Randnummer.
+        opt rn_to: u64,
+        /// `printed` when the court printed the numbers.
+        opt rn_source: String,
+    }
 }
 
-/// The answer of [`Decisions::get`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Decision {
-    /// The artifact id.
-    pub id: String,
-    /// The Aktenzeichen.
-    #[serde(default)]
-    pub aktenzeichen: String,
-    /// The court short form.
-    #[serde(default)]
-    pub court: String,
-    /// The decision date, `YYYY-MM-DD`.
-    #[serde(default)]
-    pub date: Option<String>,
-    /// The jurisdiction code.
-    #[serde(default)]
-    pub jurisdiction: Option<String>,
-    /// Document type, ECLI and file numbers.
-    #[serde(default)]
-    pub metadata: Option<DecisionMetadata>,
-    /// Whether the later history was checked. It is never promised.
-    #[serde(default)]
-    pub fortgeltung_checked: bool,
-    /// The German note about Fortgeltung.
-    #[serde(default)]
-    pub fortgeltung_note: Option<String>,
-    /// The text of the decision, or the requested slice of it.
-    #[serde(default)]
-    pub full_text: String,
-    /// The length of the whole text in characters.
-    #[serde(default)]
-    pub text_length: u64,
-    /// True when `full_text` is shorter than the decision.
-    #[serde(default)]
-    pub truncated: bool,
-    /// Where the Randnummern come from.
-    #[serde(default)]
-    pub rn_source: Option<String>,
-    /// A note about `rn_source`.
-    #[serde(default)]
-    pub rn_source_note: Option<String>,
-    /// The sections this decision has.
-    #[serde(default)]
-    pub available_sections: Vec<String>,
-    /// The Randnummer range this decision holds.
-    #[serde(default)]
-    pub available_range: Option<AvailableRange>,
-    /// What `available_range` covers.
-    #[serde(default)]
-    pub available_range_scope: Option<String>,
-    /// Whether the text carries Randnummer anchors.
-    #[serde(default)]
-    pub has_rn_anchors: bool,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The span of text a slice call served. Whole chunks come back, so it can be wider than the
+    /// request.
+    ReturnedRange {
+        /// First Randnummer served.
+        opt rn_from: u64,
+        /// Last Randnummer served.
+        opt rn_to: u64,
+        /// The heading of the section the span sits in.
+        opt section_heading: String,
+    }
+}
+
+response_struct! {
+    /// The answer of [`Decisions::get`].
+    Decision {
+        /// The artifact id.
+        req id: String,
+        /// The Aktenzeichen.
+        opt aktenzeichen: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date, `YYYY-MM-DD`.
+        opt date: String,
+        /// The jurisdiction code.
+        opt jurisdiction: Open<Jurisdiction>,
+        /// Document type, ECLI and file numbers.
+        opt metadata: DecisionMetadata,
+        /// Whether the later history was checked. It is never promised.
+        opt fortgeltung_checked: bool,
+        /// The German note about Fortgeltung.
+        opt fortgeltung_note: String,
+        /// The text of the decision, or the requested slice of it.
+        opt full_text: String,
+        /// The length of the whole text in characters.
+        opt text_length: u64,
+        /// The length of the served slice in characters.
+        opt served_text_length: u64,
+        /// True when `full_text` is shorter than the decision. A missing key is `None`, not `false`.
+        opt truncated: bool,
+        /// Where the Randnummern come from.
+        opt rn_source: String,
+        /// Where the verdict about `rn_source` came from.
+        opt rn_source_basis: String,
+        /// A note about `rn_source`.
+        opt rn_source_note: String,
+        /// The sections this decision has.
+        list available_sections: String,
+        /// The Randnummer range this decision holds.
+        opt available_range: AvailableRange,
+        /// What `available_range` covers.
+        opt available_range_scope: String,
+        /// The span a slice call served.
+        opt returned_range: ReturnedRange,
+        /// Names a widened, cut or refuted span.
+        opt returned_range_note: String,
+        /// Whether the text carries Randnummer anchors.
+        opt has_rn_anchors: bool,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
 }
 
 /// Parameters of [`Decisions::citations`].
@@ -349,198 +296,138 @@ impl CitationsParams {
     }
 }
 
-/// The corpus entry a citation resolved to.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CorpusRef {
-    /// The artifact id.
-    #[serde(default)]
-    pub artifact_id: String,
-    /// The court short form.
-    #[serde(default)]
-    pub court: Option<String>,
-    /// The decision date.
-    #[serde(default)]
-    pub date: Option<String>,
-    /// The Aktenzeichen.
-    #[serde(default)]
-    pub az: Option<String>,
-    /// The document type.
-    #[serde(default)]
-    pub document_type: Option<String>,
-    /// The ECLI.
-    #[serde(default)]
-    pub ecli: Option<String>,
-    /// The page of the decision on klaracase.de.
-    #[serde(default)]
-    pub corpus_url: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The corpus entry a citation resolved to.
+    CorpusRef {
+        /// The artifact id.
+        req artifact_id: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date.
+        opt date: String,
+        /// The Aktenzeichen.
+        opt az: String,
+        /// The document type.
+        opt document_type: String,
+        /// The ECLI.
+        opt ecli: String,
+        /// The page of the decision on klaracase.de.
+        opt corpus_url: String,
+    }
 }
 
-/// One citation edge.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CitationEdge {
-    /// The canonical form of the cited reference.
-    #[serde(default)]
-    pub reference_canonical: String,
-    /// The role of the reference, for example `leitentscheidung`.
-    #[serde(default)]
-    pub reference_role: Option<String>,
-    /// For example `resolved`.
-    #[serde(default)]
-    pub resolution_status: String,
-    /// Whether the other end is in the corpus.
-    #[serde(default)]
-    pub in_corpus: bool,
-    /// The corpus entry, when the other end is in the corpus.
-    #[serde(default)]
-    pub corpus: Option<CorpusRef>,
-    /// The artifact id the edge starts at.
-    #[serde(default)]
-    pub from_artifact_id: Option<String>,
-    /// The hop count. Set by the citation graph.
-    #[serde(default)]
-    pub hop: Option<u64>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// One citation edge.
+    CitationEdge {
+        /// The canonical form of the cited reference.
+        req reference_canonical: String,
+        /// The role of the reference, for example `leitentscheidung`.
+        opt reference_role: String,
+        /// How far the edge resolved.
+        opt resolution_status: Open<ResolutionStatus>,
+        /// Whether the other end is in the corpus.
+        opt in_corpus: bool,
+        /// The corpus entry, when the other end is in the corpus.
+        opt corpus: CorpusRef,
+        /// The artifact id the edge starts at.
+        opt from_artifact_id: String,
+        /// The hop count. Set by the citation graph at depth 2.
+        opt hop: u64,
+    }
 }
 
-/// The decision a citation graph starts at.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CitationSource {
-    /// The artifact id.
-    #[serde(default)]
-    pub id: String,
-    /// The Aktenzeichen.
-    #[serde(default)]
-    pub aktenzeichen: Option<String>,
-    /// The court short form.
-    #[serde(default)]
-    pub court: Option<String>,
-    /// The decision date.
-    #[serde(default)]
-    pub date: Option<String>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The decision a citation graph starts at.
+    CitationSource {
+        /// The artifact id.
+        req id: String,
+        /// The Aktenzeichen.
+        opt aktenzeichen: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date.
+        opt date: String,
+    }
 }
 
-/// Paging facts of a citation graph.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CitationPagination {
-    /// The page served.
-    #[serde(default)]
-    pub page: u64,
-    /// Neighbours per page and direction.
-    #[serde(default)]
-    pub page_size: u64,
-    /// The last page.
-    #[serde(default)]
-    pub max_page: u64,
-    /// Whether more references exist.
-    #[serde(default)]
-    pub has_more_references: bool,
-    /// Whether more citing decisions exist.
-    #[serde(default)]
-    pub has_more_referenced_by: bool,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// Paging facts of a citation graph.
+    CitationPagination {
+        /// The page served.
+        opt page: u64,
+        /// Neighbours per page and direction.
+        opt page_size: u64,
+        /// The last page.
+        opt max_page: u64,
+        /// The most distinct neighbours any page can reach.
+        opt reachable_distinct_max: u64,
+        /// Pages of references.
+        opt references_pages: u64,
+        /// Pages of citing decisions.
+        opt referenced_by_pages: u64,
+        /// Whether more references exist.
+        opt has_more_references: bool,
+        /// Whether more citing decisions exist.
+        opt has_more_referenced_by: bool,
+        /// The depth at which paging applies.
+        opt applies_at_depth: u64,
+    }
 }
 
-/// The answer of [`Decisions::citations`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CitationGraph {
-    /// The decision the graph starts at.
-    pub source: CitationSource,
-    /// Decisions the source cites.
-    #[serde(default)]
-    pub references: Vec<CitationEdge>,
-    /// Decisions citing the source.
-    #[serde(default)]
-    pub referenced_by: Vec<CitationEdge>,
-    /// The direction served.
-    #[serde(default)]
-    pub served_direction: String,
-    /// References served on this page.
-    #[serde(default)]
-    pub served_references_total: u64,
-    /// Citing decisions served on this page.
-    #[serde(default)]
-    pub served_referenced_by_total: u64,
-    /// All references.
-    #[serde(default)]
-    pub references_total: u64,
-    /// References that resolved.
-    #[serde(default)]
-    pub references_resolved_total: u64,
-    /// All citing decisions.
-    #[serde(default)]
-    pub referenced_by_total: u64,
-    /// References that did not resolve.
-    #[serde(default)]
-    pub references_unresolved_total: u64,
-    /// Why references were withheld.
-    #[serde(default)]
-    pub references_withheld_reasons: Vec<Value>,
-    /// What the totals cover.
-    #[serde(default)]
-    pub totals_scope: String,
-    /// Cap per direction.
-    #[serde(default)]
-    pub per_direction_cap: u64,
-    /// Cap on unresolved edges.
-    #[serde(default)]
-    pub unresolved_cap: u64,
-    /// Cap on nodes at depth 2.
-    #[serde(default)]
-    pub node_cap: u64,
-    /// Whether the graph was cut.
-    #[serde(default)]
-    pub truncated: bool,
-    /// Nodes left out at depth 2.
-    #[serde(default)]
-    pub nodes_omitted: u64,
-    /// True when the payload was cut to fit the response budget.
-    #[serde(default)]
-    pub payload_truncated: bool,
-    /// Paging facts.
-    #[serde(default)]
-    pub pagination: Option<CitationPagination>,
-    /// Whether the later history was checked. It is never promised.
-    #[serde(default)]
-    pub fortgeltung_checked: bool,
-    /// The German note about Fortgeltung.
-    #[serde(default)]
-    pub fortgeltung_note: Option<String>,
-    /// The API version of the answer.
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// Link to the changelog.
-    #[serde(default)]
-    pub changelog_url: Option<String>,
-    /// What the call cost.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    /// Keys this crate does not model.
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+response_struct! {
+    /// The answer of [`Decisions::citations`].
+    CitationGraph {
+        /// The decision the graph starts at.
+        req source: CitationSource,
+        /// Decisions the source cites.
+        list references: CitationEdge,
+        /// Decisions citing the source.
+        list referenced_by: CitationEdge,
+        /// The direction served.
+        opt served_direction: Open<Direction>,
+        /// References served on this page.
+        opt served_references_total: u64,
+        /// Citing decisions served on this page.
+        opt served_referenced_by_total: u64,
+        /// All references.
+        opt references_total: u64,
+        /// References that resolved.
+        opt references_resolved_total: u64,
+        /// References that did not resolve.
+        opt references_unresolved_total: u64,
+        /// All citing decisions.
+        opt referenced_by_total: u64,
+        /// Why references were withheld. The API has never sent an element, so the element type
+        /// stays `Value` until a sample exists.
+        list references_withheld_reasons: Value,
+        /// What the totals cover.
+        opt totals_scope: String,
+        /// Cap per direction.
+        opt per_direction_cap: u64,
+        /// Cap on unresolved edges.
+        opt unresolved_cap: u64,
+        /// Cap on nodes at depth 2.
+        opt node_cap: u64,
+        /// Whether the graph was cut.
+        opt truncated: bool,
+        /// Nodes left out at depth 2.
+        opt nodes_omitted: u64,
+        /// True when the payload was cut to fit the response budget.
+        opt payload_truncated: bool,
+        /// Paging facts.
+        opt pagination: CitationPagination,
+        /// Whether the later history was checked. It is never promised.
+        opt fortgeltung_checked: bool,
+        /// The German note about Fortgeltung.
+        opt fortgeltung_note: String,
+        /// The API version of the answer.
+        opt api_version: String,
+        /// Link to the changelog.
+        opt changelog_url: String,
+        /// What the call cost.
+        opt credits: Credits,
+    }
 }
-
-impl_extras!(
-    SearchHit,
-    DecisionSearchResults,
-    DecisionMetadata,
-    AvailableRange,
-    Decision,
-    CorpusRef,
-    CitationEdge,
-    CitationSource,
-    CitationPagination,
-    CitationGraph,
-);
 
 /// The decision operations. Get it with [`Klaracase::decisions`].
 #[derive(Debug, Clone, Copy)]
@@ -599,7 +486,7 @@ impl Decisions<'_> {
     ///         GetDecisionParams { section: Some("Gründe".into()), ..Default::default() },
     ///     )
     ///     .await?;
-    /// println!("{}", decision.full_text);
+    /// println!("{:?}", decision.full_text);
     /// # Ok(()) }
     /// ```
     pub async fn get(

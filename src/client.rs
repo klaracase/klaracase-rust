@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use reqwest::Method;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use reqwest::multipart::{Form, Part};
@@ -154,15 +155,9 @@ impl Klaracase {
             let api_release = header_text(&answer.headers, "x-klaracase-api-release");
 
             if (200..300).contains(&answer.status) {
-                let raw: Value =
-                    serde_json::from_slice(&answer.body).map_err(|source| Error::Decode {
-                        status: answer.status,
-                        source,
-                    })?;
-                let body = T::deserialize(&raw).map_err(|source| Error::Decode {
-                    status: answer.status,
-                    source,
-                })?;
+                let decode_error = |source| Error::decode(answer.status, &answer.body, source);
+                let raw: Value = serde_json::from_slice(&answer.body).map_err(decode_error)?;
+                let body = T::deserialize(&raw).map_err(decode_error)?;
                 let meta = ResponseMeta {
                     status: answer.status,
                     api_release,
@@ -233,7 +228,9 @@ impl Klaracase {
                 filename,
                 content_type,
             } => {
-                let part = Part::bytes(bytes.clone()).file_name(filename.clone());
+                let length = bytes.len() as u64;
+                let part = Part::stream_with_length(reqwest::Body::from(bytes.clone()), length)
+                    .file_name(filename.clone());
                 let part = part.mime_str(content_type)?;
                 builder.multipart(Form::new().part("file", part))
             }
@@ -267,9 +264,9 @@ struct RawAnswer {
 #[derive(Debug, Clone)]
 pub(crate) enum Body {
     None,
-    Json(Vec<u8>),
+    Json(Bytes),
     File {
-        bytes: Vec<u8>,
+        bytes: Bytes,
         filename: String,
         content_type: String,
     },
@@ -299,7 +296,7 @@ impl Request {
             method: Method::POST,
             path: path.into(),
             query: Query::new(),
-            body: Body::Json(body.to_string().into_bytes()),
+            body: Body::Json(Bytes::from(body.to_string())),
         }
     }
 }

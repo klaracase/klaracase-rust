@@ -274,11 +274,11 @@ async fn dispatch(
             outcome(
                 client
                     .citation_check_documents()
-                    .upload(UploadParams {
+                    .upload(UploadParams::new(
                         bytes,
-                        filename: a.required("filename"),
-                        content_type: a.required("content_type"),
-                    })
+                        a.required("filename"),
+                        a.required("content_type"),
+                    ))
                     .await,
             )
         }
@@ -964,7 +964,12 @@ fn check_success(
         } else {
             lookup(typed, path)
         };
-        let found = found.ok_or_else(|| format!("path `{path}` not found"))?;
+        // A documented key that is `None` is not written by the typed view. It reads as null, but
+        // only when the raw body agrees: absent or `null` there too.
+        let absent_in_raw = lookup(raw, path).is_none_or(Value::is_null);
+        let found = found
+            .or_else(|| (want.is_null() && absent_in_raw).then_some(&Value::Null))
+            .ok_or_else(|| format!("path `{path}` not found"))?;
         matches(found, want).map_err(|e| format!("`{path}`: {e}"))?;
     }
     if expected.get("body_roundtrip").and_then(Value::as_bool) == Some(true) {

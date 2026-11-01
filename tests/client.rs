@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use klaracase::{
-    Clock, CreateDatapackageParams, Error, Klaracase, SearchDecisionsParams, SleepFuture, Sleeper,
-    WaitParams,
+    Clock, CreateDatapackageParams, DocumentStatus, Error, Klaracase, Open, SearchDecisionsParams,
+    SleepFuture, Sleeper, WaitParams,
 };
 use serde_json::Value;
 
@@ -83,7 +83,10 @@ async fn wait_until_ready_times_out_on_the_injected_clock() {
     let Error::DocumentTimeout { receipt } = &error else {
         panic!("wrong error: {error}")
     };
-    assert_eq!(receipt.status, "extracting");
+    assert_eq!(
+        receipt.status,
+        Some(Open::Known(DocumentStatus::Extracting))
+    );
     assert_eq!(error.code(), Some("wait_timeout"));
     // Polls at 0, 2, 4, 6, 8 and 10 seconds of fake time; the sixth poll sees the deadline.
     assert_eq!(server.requests().len(), 6);
@@ -197,6 +200,32 @@ async fn a_2xx_answer_that_is_not_json_is_a_decode_error() {
 }
 
 #[tokio::test]
+async fn a_decode_error_keeps_the_start_of_the_paid_answer() {
+    // A well-formed JSON body of the wrong shape: `results` must be a list.
+    let long_tail = "x".repeat(2_000);
+    let body = format!(r#"{{"results": {{"surprise": "{long_tail}"}}}}"#);
+    let server = MockServer::start(vec![MockResponse::json(200, &body)], true).await;
+    let client = client_for(&server, &FakeTime::new());
+
+    let error = client
+        .decisions()
+        .search(SearchDecisionsParams::new("Untreue"))
+        .await
+        .unwrap_err();
+
+    let Error::Decode {
+        status, body: kept, ..
+    } = &error
+    else {
+        panic!("wrong error: {error}")
+    };
+    assert_eq!(*status, 200);
+    assert_eq!(kept.chars().count(), 1_000, "truncated to 1000 characters");
+    assert!(kept.starts_with(r#"{"results": {"surprise": "xxx"#));
+    assert_eq!(error.status(), Some(200));
+}
+
+#[tokio::test]
 async fn path_parameters_that_a_url_parser_would_collapse_are_refused_before_a_request() {
     let server = MockServer::start(vec![], true).await;
     let client = client_for(&server, &FakeTime::new());
@@ -266,5 +295,5 @@ async fn calls_can_run_on_spawned_tasks() {
     });
 
     let response = handle.await.expect("task").expect("coverage");
-    assert_eq!(response.courts_total, 400);
+    assert_eq!(response.courts_total, Some(400));
 }
