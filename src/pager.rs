@@ -44,10 +44,11 @@ pub(crate) type PageRequest = Box<dyn Fn(u32) -> Result<Request, Error> + Send +
 /// `max_pages` is required, and it is clamped to what the server serves: 10 pages for a search and
 /// 20 for a citation graph. A walk also stops at the first empty page, which is not returned.
 ///
-/// **Cost.** A search costs one credit per distinct query and filter set per month, and the pages of
-/// the same search cost nothing more. A citation graph costs two credits per decision, direction
-/// and depth per month, and its pages are free. Every page is still one request against the rate
-/// limit of 60 requests per minute per token, and one that comes back empty is a request too.
+/// **Cost.** Paging the same query within a credit period costs no extra credits. A changed query,
+/// filter or mode is a new charge. Check `credits` on each response. The same holds for the
+/// citation graph. `max_pages` is a guard against a runaway loop. Every page is still one request
+/// against the rate limit of 60 requests per minute per token, and one that comes back empty is a
+/// request too.
 pub struct Pager<T> {
     client: Klaracase,
     request: PageRequest,

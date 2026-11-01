@@ -8,6 +8,11 @@ All notable changes to this crate are documented here. The format follows
 
 ### Added
 
+- Paging: `Pager` with `next_page()`, from `decisions().search(..).pages(max_pages)` and
+  `decisions().citations(..).pages(max_pages)`. `max_pages` is required and clamped (10 for a search,
+  20 for a citation graph) as a guard against a runaway loop. Paging the same query within a credit
+  period costs no extra credits; a changed query, filter or mode is a new charge.
+
 - Async client `Klaracase` for the Klaracase REST API v1 (API release 0.95.0): decisions, cross-type
   search, norms, data packages, citation checks, citation check documents, corpus coverage and facets.
 - Typed request parameters. `None` is never sent; `Some(false)` and `Some(0)` are sent.

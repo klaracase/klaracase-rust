@@ -641,7 +641,8 @@ impl<'a> Decisions<'a> {
     /// Starts a search of the court decisions. `GET /decisions/search`. Chain setters, then call
     /// [`send`](SearchRequest::send) or [`pages`](SearchRequest::pages).
     ///
-    /// One credit per distinct query and filter set per month; paging and a repeat cost nothing more.
+    /// One credit per distinct query, filter set and mode per credit period. Paging the same query
+    /// within a credit period costs no extra credits. A changed query, filter or mode is a new charge.
     ///
     /// ```no_run
     /// use klaracase::{Klaracase, Mode};
@@ -732,7 +733,8 @@ impl<'a> Decisions<'a> {
     /// Starts a read of the citations of one decision. `GET /decisions/{id}/citations`. Chain
     /// setters, then call [`send`](CitationsRequest::send) or [`pages`](CitationsRequest::pages).
     ///
-    /// Two credits per decision, direction and depth per month; paging is free.
+    /// Two credits per decision, direction and depth per credit period. Paging the same graph within
+    /// a credit period costs no extra credits. Check `credits` on each response.
     pub fn citations(&self, id: impl Into<String>) -> CitationsRequest<'a> {
         CitationsRequest {
             client: self.client,
@@ -832,9 +834,9 @@ impl SearchRequest<'_> {
     /// first page by default).
     ///
     /// `max_pages` is required and is clamped to the 10 pages the server serves. The walk stops at
-    /// the first empty page. The search costs one credit per distinct query and filter set per month;
-    /// its further pages cost nothing more, but each is a request against the rate limit. See
-    /// [`Pager`].
+    /// the first empty page. Paging the same query within a credit period costs no extra credits. A
+    /// changed query, filter or mode is a new charge. Check `credits` on each response. Each page is
+    /// still a request against the rate limit. See [`Pager`].
     pub fn pages(self, max_pages: u32) -> Pager<DecisionSearchResults> {
         let first = self.params.page.unwrap_or(1);
         let params = self.params;
@@ -906,9 +908,10 @@ impl CitationsRequest<'_> {
     ///
     /// `max_pages` is required and is clamped to the 20 pages the server serves. At depth 2 the
     /// server serves page 1 only, so the walk is one page. The walk stops at the first empty page and
-    /// after a page that says no more neighbours follow. The graph costs two credits per decision,
-    /// direction and depth per month and its pages are free, but each is a request against the rate
-    /// limit. See [`Pager`].
+    /// after a page that says no more neighbours follow. Paging the same graph within a credit period
+    /// costs no extra credits. A changed decision, direction or depth is a new charge. Check
+    /// `credits` on each response. Each page is still a request against the rate limit. See
+    /// [`Pager`].
     pub fn pages(self, max_pages: u32) -> Pager<CitationGraph> {
         let first = self.params.page.unwrap_or(1);
         let depth_two = self.params.depth.as_ref().is_some_and(|d| *d == Depth::Two);
