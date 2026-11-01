@@ -1,0 +1,51 @@
+[package]
+name = "klaracase"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Official Rust client for the Klaracase REST API: German court decisions, statutes and citation checks."
+license = "MIT"
+readme = "README.md"
+# TODO: replace <org> with the GitHub organization login once the owner has confirmed it.
+repository = "https://github.com/<org>/klaracase-rust"
+homepage = "https://github.com/<org>/klaracase-rust"
+documentation = "https://docs.rs/klaracase"
+keywords = ["klaracase", "legal", "germany", "api-client", "citation"]
+categories = ["api-bindings"]
+build = "build.rs"
+exclude = [".github/", "Makefile"]
+
+[features]
+default = ["rustls", "tokio"]
+# TLS through rustls (reqwest's default rustls provider and platform verifier).
+rustls = ["reqwest/rustls"]
+# TLS through the platform library (OpenSSL, Secure Transport, SChannel). Use with default-features = false.
+native-tls = ["reqwest/native-tls"]
+# The default `Sleeper` is built on tokio::time. Without it you must pass your own `Sleeper`.
+tokio = ["dep:tokio"]
+# Emit the default deprecation warning through the `log` crate instead of stderr.
+log = ["dep:log"]
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["time"], optional = true }
+url = "2"
+percent-encoding = "2"
+log = { version = "0.4", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[package.metadata.docs.rs]
+all-features = false
+rustdoc-args = ["--cfg", "docsrs"]
