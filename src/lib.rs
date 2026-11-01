@@ -6,11 +6,13 @@
 
 mod client;
 mod common;
+mod datapackages;
 mod decisions;
 mod deprecation;
 mod documents;
 mod encode;
 mod error;
+mod norms;
 mod response;
 mod retry;
 mod search;
@@ -18,6 +20,7 @@ mod types;
 
 pub use client::{ClientBuilder, Klaracase};
 pub use common::{Count, Credits, Snippet};
+pub use datapackages::{CreateDatapackageParams, Datapackage, Datapackages, PackageDecision};
 pub use decisions::{
     AvailableRange, CitationEdge, CitationGraph, CitationPagination, CitationSource,
     CitationsParams, CorpusRef, Decision, DecisionMetadata, DecisionSearchResults, Decisions,
@@ -26,6 +29,9 @@ pub use decisions::{
 pub use deprecation::{DeprecationNotice, reset_deprecation_guard};
 pub use documents::{DocumentReceipt, DocumentStatus};
 pub use error::{Error, Problem};
+pub use norms::{
+    GetNormParams, Norm, NormBody, NormLaw, NormLinks, NormNeighbours, NormVersion, Norms,
+};
 pub use response::{Extras, Response, ResponseMeta};
 pub use retry::{Clock, SleepFuture, Sleeper, SystemClock};
 pub use search::{
