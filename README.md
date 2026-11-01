@@ -13,7 +13,7 @@ cargo add klaracase
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-The crate needs Rust 1.85 or newer (edition 2024).
+The crate needs Rust 1.85 or newer (edition 2024). It runs on tokio only. The default TLS provider is rustls with aws-lc-rs, which compiles C code, so it needs a C compiler and, on some platforms, CMake or NASM. If that build is a problem, use the `native-tls` feature (see TLS below).
 
 ## Get a token
 
@@ -52,7 +52,7 @@ async fn main() -> Result<(), klaracase::Error> {
 
 Parameter structs are built with `new(...)` and chained setters. A parameter you do not set is not sent. `limit(0)` and `bridge(false)` are values and are sent. Every parameter struct is `#[non_exhaustive]`, so a new parameter in a later release does not break your code.
 
-A response dereferences to its typed body, so `found.results` works. `found.meta` holds the HTTP status, the API release and the call duration. `found.credits` says what the call cost. Keys the crate does not model stay in the `extra` map of the struct that held them. `found.raw()` returns the whole answer as `serde_json::Value`, as the server sent it.
+A response dereferences to its typed body, so `found.results` works. `found.meta` holds the HTTP status, the API release and `request_duration`, the time of the final HTTP attempt (earlier attempts and the waits between them are not counted). `found.credits` says what the call cost. Keys the crate does not model stay in the `extra` map of the struct that held them. `found.raw()` returns the whole answer as `serde_json::Value`, as the server sent it.
 
 ## Check the citations in a text
 
@@ -204,7 +204,7 @@ fn main() -> Result<(), klaracase::Error> {
 
 The builder also takes `base_url`, your own `reqwest::Client` (`http_client`, for a proxy or a custom root certificate) and an `on_deprecation` hook. When the API deprecates an endpoint, it announces this with `Deprecation` and `Sunset` headers. The client calls the hook once per process with the raw header values. The default hook writes one line to stderr, or one `log::warn!` if you enable the `log` feature.
 
-For tests, pass your own `Sleeper` and `Clock` to the builder. Then retries and `wait_until_ready` run without real waiting.
+To test your own code without the network, hand the builder a `reqwest::Client` that points at a mock server (see Testing).
 
 ## Credits
 
@@ -228,6 +228,7 @@ klaracase = { version = "0.1", default-features = false, features = ["native-tls
 | `native-tls` | no | TLS through the platform library |
 | `tokio` | yes | the default `Sleeper` uses `tokio::time`. Without it you must pass your own `Sleeper`. |
 | `log` | no | the default deprecation hook uses `log::warn!` |
+| `tracing` | no | a `debug!` event per retry and a `warn!` on a deprecation, through the `tracing` crate. The token is never in an event. |
 
 ## Stability and privacy
 

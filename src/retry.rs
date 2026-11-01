@@ -24,9 +24,12 @@ const BACKOFF_CAP_SECONDS: f64 = 8.0;
 const BACKOFF_BASE_SECONDS: f64 = 0.5;
 
 /// A boxed future that sleeps. Returned by [`Sleeper::sleep`].
+#[doc(hidden)]
 pub type SleepFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 /// Waits between attempts. Inject your own in tests to avoid real sleeping.
+///
+/// This is a test seam, not part of the everyday API, so it is hidden from the rendered docs.
 ///
 /// ```
 /// use std::time::Duration;
@@ -40,19 +43,22 @@ pub type SleepFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 ///     }
 /// }
 /// ```
+#[doc(hidden)]
 pub trait Sleeper: Send + Sync {
     /// Returns a future that completes after `duration`.
     fn sleep(&self, duration: Duration) -> SleepFuture<'_>;
 }
 
 /// A monotonic clock. The [`wait_until_ready`](crate::CitationCheckDocuments::wait_until_ready)
-/// timeout reads it. Inject your own in tests.
+/// timeout reads it. Inject your own in tests. A test seam, hidden from the rendered docs.
+#[doc(hidden)]
 pub trait Clock: Send + Sync {
     /// The current instant.
     fn now(&self) -> Instant;
 }
 
 /// The default [`Clock`]: [`Instant::now`].
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
 
@@ -64,6 +70,7 @@ impl Clock for SystemClock {
 
 /// The default [`Sleeper`], built on `tokio::time::sleep`. Needs the `tokio` feature.
 #[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokioSleeper;
 

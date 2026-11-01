@@ -146,17 +146,19 @@ impl Klaracase {
         &self,
         request: Request,
     ) -> Result<Response<T>, Error> {
-        let started = Instant::now();
         let url = self.url_for(&request)?;
         let may_retry_transport = request.method == Method::GET;
         let mut retries_done: u32 = 0;
         loop {
             let can_retry = retries_done < self.inner.max_retries;
+            let started = Instant::now();
             let answer = match self.send_once(&request, url.clone()).await {
                 Ok(answer) => answer,
                 Err(error) => {
                     if may_retry_transport && can_retry {
-                        self.sleep(retry::backoff(retries_done)).await;
+                        let wait = retry::backoff(retries_done);
+                        trace_retry(&request, None, retries_done + 1, wait);
+                        self.sleep(wait).await;
                         retries_done += 1;
                         continue;
                     }
@@ -210,6 +212,7 @@ impl Klaracase {
                 Some(seconds) => Duration::from_secs(seconds),
                 None => retry::backoff(retries_done),
             };
+            trace_retry(&request, Some(answer.status), retries_done + 1, wait);
             self.sleep(wait).await;
             retries_done += 1;
         }
@@ -266,6 +269,24 @@ impl Klaracase {
         })
     }
 }
+
+/// Emits the debug event for one retry. It names the method, the path (never the query), the status
+/// that caused it (none for a transport error), the number of the retry and the wait. The token and
+/// the headers are not part of it.
+#[cfg(feature = "tracing")]
+fn trace_retry(request: &Request, status: Option<u16>, attempt: u32, wait: Duration) {
+    tracing::debug!(
+        method = %request.method,
+        path = %request.path,
+        status,
+        attempt,
+        wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+        "retrying the Klaracase request"
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+fn trace_retry(_request: &Request, _status: Option<u16>, _attempt: u32, _wait: Duration) {}
 
 fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
@@ -424,14 +445,16 @@ impl ClientBuilder {
         self
     }
 
-    /// Replaces the [`Sleeper`] used between attempts and by `wait_until_ready`. For tests.
+    /// Replaces the sleeper used between attempts and by `wait_until_ready`. For tests.
+    #[doc(hidden)]
     #[must_use]
     pub fn sleeper(mut self, sleeper: Arc<dyn Sleeper>) -> Self {
         self.sleeper = Some(sleeper);
         self
     }
 
-    /// Replaces the [`Clock`] read by the `wait_until_ready` timeout. For tests.
+    /// Replaces the clock read by the `wait_until_ready` timeout. For tests.
+    #[doc(hidden)]
     #[must_use]
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
@@ -466,7 +489,7 @@ impl ClientBuilder {
     /// # Errors
     ///
     /// [`Error::Configuration`] when there is no token or it is empty (the message names
-    /// `KLARACASE_API_TOKEN`), when the token or the base URL is invalid, or when no [`Sleeper`] is
+    /// `KLARACASE_API_TOKEN`), when the token or the base URL is invalid, or when no sleeper is
     /// available because the `tokio` feature is off and none was given.
     pub fn build(self) -> Result<Klaracase, Error> {
         let token = self

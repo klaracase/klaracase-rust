@@ -68,7 +68,8 @@ pub struct ResponseMeta {
     pub status: u16,
     /// The value of the `X-Klaracase-Api-Release` header, if present.
     pub api_release: Option<String>,
-    /// Wall time of the whole call, retries and waits included.
+    /// Wall time of the final HTTP attempt, from sending the request to reading the whole body.
+    /// Earlier attempts and the waits between attempts are not counted.
     pub request_duration: Duration,
 }
 

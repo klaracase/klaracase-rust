@@ -46,7 +46,8 @@ pub(crate) fn deliver(notice: DeprecationNotice, hook: &(dyn Fn(DeprecationNotic
     hook(notice);
 }
 
-/// The default hook: one warning through `log` (feature `log`) or on stderr.
+/// The default hook: one warning through `tracing` (feature `tracing`), else `log` (feature `log`),
+/// else one line on stderr.
 pub(crate) fn default_hook(notice: DeprecationNotice) {
     let message = format!(
         "klaracase: the API announced a deprecation (Deprecation: {}, Sunset: {}, Link: {}). \
@@ -55,9 +56,11 @@ pub(crate) fn default_hook(notice: DeprecationNotice) {
         notice.sunset.as_deref().unwrap_or("-"),
         notice.link.as_deref().unwrap_or("-"),
     );
-    #[cfg(feature = "log")]
+    #[cfg(feature = "tracing")]
+    tracing::warn!("{message}");
+    #[cfg(all(feature = "log", not(feature = "tracing")))]
     log::warn!("{message}");
-    #[cfg(not(feature = "log"))]
+    #[cfg(not(any(feature = "log", feature = "tracing")))]
     eprintln!("{message}");
 }
 

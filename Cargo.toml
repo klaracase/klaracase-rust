@@ -24,6 +24,8 @@ native-tls = ["reqwest/native-tls"]
 tokio = ["dep:tokio"]
 # Emit the default deprecation warning through the `log` crate instead of stderr.
 log = ["dep:log"]
+# Structured events through the `tracing` crate: a debug event per retry, a warning on a deprecation.
+tracing = ["dep:tracing"]
 
 [dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "multipart"] }
@@ -35,8 +37,10 @@ tokio = { version = "1", default-features = false, features = ["time"], optional
 url = "2"
 percent-encoding = "2"
 log = { version = "0.4", optional = true }
+tracing = { version = "0.1", default-features = false, optional = true }
 
 [dev-dependencies]
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 
 [lints.rust]

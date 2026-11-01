@@ -8,6 +8,9 @@ All notable changes to this crate are documented here. The format follows
 
 ### Added
 
+- Feature `tracing`: a `debug!` event per retry (method, path, status, attempt, wait) and a `warn!` on a
+  deprecation. The token is never logged.
+
 - Paging: `Pager` with `next_page()`, from `decisions().search(..).pages(max_pages)` and
   `decisions().citations(..).pages(max_pages)`. `max_pages` is required and clamped (10 for a search,
   20 for a citation graph) as a guard against a runaway loop. Paging the same query within a credit
@@ -20,5 +23,5 @@ All notable changes to this crate are documented here. The format follows
 - One `Error` enum with a variant per HTTP status class, plus transport, timeout, configuration and
   document errors.
 - Retries on 429 and 503 for every operation, and on transport errors for GET only.
-- `Sleeper` and `Clock` traits for tests, and a deprecation hook.
+- A deprecation hook. `Sleeper` and `Clock` are test seams, hidden from the docs.
 - Features `rustls` (default), `native-tls`, `tokio` (default) and `log`.
