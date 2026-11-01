@@ -4,6 +4,7 @@
 //! replace a lawyer's review. A `not_found` verdict means the citation was not found in the corpus;
 //! it is not a claim that the citation is fabricated.
 
+mod citation_checks;
 mod client;
 mod common;
 mod datapackages;
@@ -18,6 +19,10 @@ mod retry;
 mod search;
 mod types;
 
+pub use citation_checks::{
+    CheckProgress, CitationCheckRun, CitationChecks, CreateCitationCheckParams, Finding,
+    MatchedDecision, ReasonCount, RunStatus, UniqueCitation, Verdict,
+};
 pub use client::{ClientBuilder, Klaracase};
 pub use common::{Count, Credits, Snippet};
 pub use datapackages::{CreateDatapackageParams, Datapackage, Datapackages, PackageDecision};
