@@ -63,4 +63,6 @@ the changes made to the first draft.
   costs credits.
 - `Sleeper`, `Clock` and their builder methods are hidden from the rendered docs. They remain
   available as test seams.
+- Lower bounds of the dependencies in `Cargo.toml` are raised to versions that build and pass the tests
+  (checked with `cargo update -Z direct-minimal-versions`).
 - `missing_docs` and broken intra-doc links are denied. docs.rs builds with all features.
