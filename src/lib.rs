@@ -42,7 +42,7 @@ pub use decisions::{
 };
 pub use deprecation::{DeprecationNotice, reset_deprecation_guard};
 pub use documents::{CitationCheckDocuments, DocumentReceipt, UploadParams, WaitParams};
-pub use error::{Error, Problem};
+pub use error::{Candidate, Error, Problem};
 pub use norms::{
     GetNormParams, Norm, NormBody, NormLaw, NormLinks, NormNeighbours, NormVersion, Norms,
     QualifierCheck, ToolHint,

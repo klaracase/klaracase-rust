@@ -187,7 +187,8 @@ impl Klaracase {
 
             let retry_after_header = header_text(&answer.headers, "retry-after")
                 .and_then(|value| retry::parse_retry_after(&value));
-            let problem = Problem::from_answer(answer.status, api_release, &answer.body);
+            let problem =
+                Problem::from_answer(answer.status, api_release, &answer.headers, &answer.body);
             let error = Error::from_problem(answer.status, problem, retry_after_header);
 
             if !matches!(answer.status, 429 | 503) || !can_retry {

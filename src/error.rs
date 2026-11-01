@@ -5,10 +5,14 @@
 //! variant. The `status` member in a body is never consulted for that.
 
 use std::fmt;
+use std::time::Duration;
 
+use reqwest::header::{HeaderMap, HeaderName};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::{Map, Value};
 
 use crate::documents::DocumentReceipt;
+use crate::open::response_struct;
 
 /// The longest body excerpt kept in [`Problem::detail`] for an answer that is not a problem.
 const DETAIL_LIMIT: usize = 1_000;
@@ -19,15 +23,33 @@ pub const UNKNOWN_CODE: &str = "unknown";
 /// The `code` of [`Error::ClientValidation`].
 pub const CLIENT_VALIDATION_CODE: &str = "client_validation";
 
+response_struct! {
+    /// One decision that an ambiguous Aktenzeichen matches. Pass its `id` to read that decision.
+    Candidate {
+        /// The decision id.
+        opt id: String,
+        /// The court short form.
+        opt court: String,
+        /// The decision date, `YYYY-MM-DD`.
+        opt date: String,
+        /// The Aktenzeichen.
+        opt aktenzeichen: String,
+    }
+}
+
 /// An RFC 9457 problem as the API sends it.
 ///
 /// `type_`, `title`, `status`, `detail` and `code` are the standard members. Every other member of the
-/// body, typed ones such as `cost` included, stays readable in [`Problem::extra`].
+/// body stays readable in [`Problem::extra`]. Five members that carry a decision are also typed:
+/// [`candidates`](Self::candidates), [`successor`](Self::successor), [`unit`](Self::unit),
+/// [`cap`](Self::cap) and [`resets_at`](Self::resets_at). They are `None` when the answer has no such
+/// member or it has another type, and they are copies: `extra` still holds them.
 ///
 /// For an answer that is not a problem (an HTML 502 from a proxy, `{"message": "Server Error"}`, an
 /// empty body) the SDK builds a problem with `code = "unknown"` and the raw body text in `detail`, cut
 /// to at most 1,000 characters.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Problem {
     /// The `type` member: a name URI such as `https://klaracase.de/docs/api/errors#not_found`.
     /// Treat it as a name. Do not fetch it.
@@ -44,6 +66,18 @@ pub struct Problem {
     pub api_release: Option<String>,
     /// Every member of the body except `type`, `title`, `status`, `detail` and `code`.
     pub extra: Map<String, Value>,
+    /// On 422 `ambiguous_aktenzeichen`: the decisions the Aktenzeichen matches. Call again with one
+    /// of their ids.
+    pub candidates: Option<Vec<Candidate>>,
+    /// On 404 `statute_superseded`: the statute that replaced the one cited, for example `BauGB`.
+    pub successor: Option<String>,
+    /// On 429 `volume_cap`: the capped unit, `rows` or `documents`.
+    pub unit: Option<String>,
+    /// On 429 `volume_cap`: the organization's daily cap for that unit.
+    pub cap: Option<u64>,
+    /// On 429 `volume_cap`: when the daily cap resets, an RFC 3339 time.
+    pub resets_at: Option<String>,
+    headers: HeaderMap,
 }
 
 impl Problem {
@@ -51,7 +85,18 @@ impl Problem {
     ///
     /// A body is a problem when it is a JSON object with a string `code`. Any other body gives
     /// `code = "unknown"`.
-    pub(crate) fn from_answer(status: u16, api_release: Option<String>, body: &[u8]) -> Self {
+    pub(crate) fn from_answer(
+        status: u16,
+        api_release: Option<String>,
+        headers: &HeaderMap,
+        body: &[u8],
+    ) -> Self {
+        let mut problem = Self::from_body(status, api_release, body);
+        problem.headers = safe_headers(headers);
+        problem
+    }
+
+    fn from_body(status: u16, api_release: Option<String>, body: &[u8]) -> Self {
         if let Some((code, mut members)) = problem_members(body) {
             let text = |members: &mut Map<String, Value>, key: &str| match members.remove(key) {
                 Some(Value::String(value)) => value,
@@ -73,6 +118,23 @@ impl Problem {
                 None => None,
             };
             return Self {
+                candidates: members
+                    .get("candidates")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                successor: members
+                    .get("successor")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                unit: members
+                    .get("unit")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                cap: members.get("cap").and_then(Value::as_u64),
+                resets_at: members
+                    .get("resets_at")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                headers: HeaderMap::new(),
                 type_: if type_.is_empty() {
                     "about:blank".to_owned()
                 } else {
@@ -95,7 +157,36 @@ impl Problem {
             code: UNKNOWN_CODE.to_owned(),
             api_release,
             extra: Map::new(),
+            candidates: None,
+            successor: None,
+            unit: None,
+            cap: None,
+            resets_at: None,
+            headers: HeaderMap::new(),
         }
+    }
+
+    /// The response headers of the answer, without any credential header.
+    ///
+    /// `Authorization`, `Proxy-Authorization` and `Set-Cookie` are never kept.
+    #[must_use]
+    pub fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+
+    /// Seconds the server asks you to wait: the `retry_after_seconds` member, else the `Retry-After`
+    /// header.
+    #[must_use]
+    pub fn retry_after_seconds(&self) -> Option<u64> {
+        self.extra
+            .get("retry_after_seconds")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                self.headers
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(crate::retry::parse_retry_after)
+            })
     }
 
     /// The ability a 403 `token_ability_missing` answer asks for, for example `citation-check`.
@@ -116,6 +207,15 @@ impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({}): {}", self.status, self.code, self.detail)
     }
+}
+
+/// Copies the headers of an answer, minus the ones that carry a credential.
+fn safe_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut kept = headers.clone();
+    for name in ["authorization", "proxy-authorization", "set-cookie"] {
+        kept.remove(HeaderName::from_static(name));
+    }
+    kept
 }
 
 /// Splits a body into its `code` and its other members, when the body is a problem.
@@ -153,6 +253,13 @@ fn reason_phrase(status: u16) -> &'static str {
 /// Everything that can go wrong in a call.
 ///
 /// The enum is `#[non_exhaustive]`: match the variants you care about and end with `_`.
+///
+/// Besides the variants it has helpers that cover most handling: [`code`](Error::code),
+/// [`status`](Error::status), [`is_retryable`](Error::is_retryable),
+/// [`retry_after`](Error::retry_after) and [`headers`](Error::headers).
+///
+/// It implements `Serialize`, so a program can hand it to a caller as JSON: an object with
+/// `code`, `status`, `detail` and `retry_after_seconds`. Members that do not apply are `null`.
 ///
 /// ```
 /// use klaracase::Error;
@@ -328,6 +435,57 @@ impl Error {
         }
     }
 
+    /// The response headers of the answer, for an error that came from one. `Authorization` is never
+    /// in it.
+    #[must_use]
+    pub fn headers(&self) -> Option<&HeaderMap> {
+        self.problem().map(Problem::headers)
+    }
+
+    /// True when the same call can succeed if you send it again later.
+    ///
+    /// That holds for [`Error::Transport`], [`Error::Timeout`], [`Error::RateLimit`] and
+    /// [`Error::ServiceUnavailable`]. It does not hold for a wrong token, a missing resource, bad
+    /// input, too few credits, a document that failed to extract or a body that did not decode.
+    /// The client already retried the call as often as [`max_retries`](crate::ClientBuilder::max_retries)
+    /// allows before it returned the error.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_)
+                | Self::Timeout(_)
+                | Self::RateLimit { .. }
+                | Self::ServiceUnavailable(_)
+        )
+    }
+
+    /// How long the server asks you to wait before you retry, if it said.
+    ///
+    /// It reads `retry_after_seconds` from the body, then the `Retry-After` header.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        let seconds = match self {
+            Self::RateLimit {
+                retry_after_seconds,
+                ..
+            } => *retry_after_seconds,
+            other => other.problem().and_then(Problem::retry_after_seconds),
+        };
+        seconds.map(Duration::from_secs)
+    }
+
+    /// The code used when an error is written as JSON. Errors without a server code get a stable
+    /// name of their own.
+    fn serialized_code(&self) -> &str {
+        match self {
+            Self::Transport(_) => "transport_error",
+            Self::Timeout(_) => "timeout",
+            Self::Decode { .. } => "decode_error",
+            other => other.code().unwrap_or(UNKNOWN_CODE),
+        }
+    }
+
     /// True for [`Error::Transport`] and [`Error::Timeout`].
     #[must_use]
     pub fn is_transport(&self) -> bool {
@@ -391,5 +549,25 @@ impl Error {
             code,
             message: message.into(),
         }
+    }
+}
+
+impl Serialize for Error {
+    /// Writes `{code, status, detail, retry_after_seconds}`. The detail is the problem `detail` for an
+    /// API error, else the message of the error. No header and no token is written.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let detail = match self.problem() {
+            Some(problem) => problem.detail.clone(),
+            None => self.to_string(),
+        };
+        let mut out = serializer.serialize_struct("Error", 4)?;
+        out.serialize_field("code", self.serialized_code())?;
+        out.serialize_field("status", &self.status())?;
+        out.serialize_field("detail", &detail)?;
+        out.serialize_field(
+            "retry_after_seconds",
+            &self.retry_after().map(|d| d.as_secs()),
+        )?;
+        out.end()
     }
 }
