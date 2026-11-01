@@ -49,9 +49,7 @@ impl Problem {
     /// A body is a problem when it is a JSON object with a string `code`. Any other body gives
     /// `code = "unknown"`.
     pub(crate) fn from_answer(status: u16, api_release: Option<String>, body: &[u8]) -> Self {
-        if let Ok(Value::Object(mut members)) = serde_json::from_slice::<Value>(body)
-            && let Some(Value::String(code)) = members.remove("code")
-        {
+        if let Some((code, mut members)) = problem_members(body) {
             let text = |members: &mut Map<String, Value>, key: &str| match members.remove(key) {
                 Some(Value::String(value)) => value,
                 Some(other) => {
@@ -114,6 +112,17 @@ impl Problem {
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({}): {}", self.status, self.code, self.detail)
+    }
+}
+
+/// Splits a body into its `code` and its other members, when the body is a problem.
+fn problem_members(body: &[u8]) -> Option<(String, Map<String, Value>)> {
+    let Ok(Value::Object(mut members)) = serde_json::from_slice::<Value>(body) else {
+        return None;
+    };
+    match members.remove("code") {
+        Some(Value::String(code)) => Some((code, members)),
+        _ => None,
     }
 }
 

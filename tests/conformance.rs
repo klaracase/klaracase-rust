@@ -505,10 +505,8 @@ fn check_request(seen: &RecordedRequest, expected: &Value, case: &Value) -> Resu
                 if !got.starts_with(value) {
                     return Err(format!("user-agent {got} lacks prefix {value}"));
                 }
-                if let Some(suffix) = suffix
-                    && !got.ends_with(&format!(" {suffix}"))
-                {
-                    return Err(format!("user-agent {got} lacks suffix {suffix}"));
+                if suffix.is_some_and(|suffix| !got.ends_with(&format!(" {suffix}"))) {
+                    return Err(format!("user-agent {got} lacks suffix {suffix:?}"));
                 }
             }
             "content-type" => {
@@ -917,21 +915,19 @@ fn check_outcomes(
 
     // Deprecation hook.
     let delivered = notices.lock().unwrap().clone();
-    if let Some(expect_warning) = expected.get("deprecation_warning").and_then(Value::as_bool)
-        && expect_warning != !delivered.is_empty()
-    {
+    let expect_warning = expected.get("deprecation_warning").and_then(Value::as_bool);
+    if expect_warning.is_some_and(|wanted| wanted == delivered.is_empty()) {
         return Err(format!(
-            "deprecation_warning expected {expect_warning}, hook ran {} times",
+            "deprecation_warning expected {expect_warning:?}, hook ran {} times",
             delivered.len()
         ));
     }
-    if let Some(total) = expected
+    let expect_count = expected
         .get("deprecation_warning_count")
-        .and_then(Value::as_u64)
-        && delivered.len() as u64 != total
-    {
+        .and_then(Value::as_u64);
+    if expect_count.is_some_and(|total| delivered.len() as u64 != total) {
         return Err(format!(
-            "deprecation hook ran {} times, expected {total}",
+            "deprecation hook ran {} times, expected {expect_count:?}",
             delivered.len()
         ));
     }
