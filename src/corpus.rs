@@ -21,6 +21,7 @@ use crate::types::{Branch, FacetField, FacetType};
 /// let params = CoverageParams::default().branch(Branch::Sozial).top(10);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CoverageParams {
@@ -289,6 +290,7 @@ response_struct! {
 /// let params = FacetsParams::default().facet_type(FacetType::Decision).prefix("BG");
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct FacetsParams {

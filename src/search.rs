@@ -25,6 +25,7 @@ use crate::types::{ArtifactType, Branch, Confidence, DocumentType, Jurisdiction,
 /// assert!(params.validate().is_ok());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CrossTypeSearchParams {

@@ -113,6 +113,30 @@ impl<'de, E: WireValue> Deserialize<'de> for Open<E> {
     }
 }
 
+/// The schema of an open vocabulary: the list of values this crate knows.
+///
+/// The server may accept more values, and the string forms of the setters send them as given. The
+/// schema is meant for tool definitions, where a closed list guides a model best, so it does not
+/// add "or any other string". A validator that must accept a later value should not use it.
+#[cfg(feature = "schemars")]
+impl<E: schemars::JsonSchema> schemars::JsonSchema for Open<E> {
+    fn inline_schema() -> bool {
+        E::inline_schema()
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        E::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        E::schema_id()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        E::json_schema(generator)
+    }
+}
+
 /// A JSON `null` reads as the default value, so a null list never fails a call that was paid for.
 pub(crate) fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
@@ -137,6 +161,7 @@ macro_rules! wire_enum {
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
             ::serde::Serialize, ::serde::Deserialize,
         )]
+        #[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
         #[non_exhaustive]
         pub enum $name {
             $($(#[$vmeta])* #[serde(rename = $wire)] $variant),+

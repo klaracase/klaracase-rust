@@ -20,6 +20,7 @@ use crate::types::{Jurisdiction, Lifecycle};
 /// let params = GetNormParams::default().jurisdiction(Jurisdiction::Eu);
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct GetNormParams {

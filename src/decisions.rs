@@ -39,6 +39,7 @@ use crate::types::{
 /// assert!(params.validate().is_ok());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SearchDecisionsParams {
@@ -260,6 +261,7 @@ response_struct! {
 /// assert!(params.validate().is_ok());
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct GetDecisionParams {
@@ -429,6 +431,7 @@ response_struct! {
 /// assert!(params.validate().is_ok());
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(::schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CitationsParams {

@@ -8,6 +8,10 @@ All notable changes to this crate are documented here. The format follows
 
 ### Added
 
+- Feature `schemars`: `JsonSchema` for the request parameters and the request enums, and a hand
+  implementation for `Open<E>` (the list of known values). `examples/agent_tools.rs` builds tool
+  definitions from the schemas, runs a call by name, shortens the answers and turns errors into JSON.
+
 - Feature `tracing`: a `debug!` event per retry (method, path, status, attempt, wait) and a `warn!` on a
   deprecation. The token is never logged.
 
