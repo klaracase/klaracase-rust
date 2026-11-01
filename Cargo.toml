@@ -47,13 +47,17 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 
 [lints.rust]
-missing_docs = "warn"
+missing_docs = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 
 [package.metadata.docs.rs]
-all-features = false
+all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
