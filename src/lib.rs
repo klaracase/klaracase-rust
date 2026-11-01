@@ -4,6 +4,8 @@
 //! replace a lawyer's review. A `not_found` verdict means the citation was not found in the corpus;
 //! it is not a claim that the citation is fabricated.
 
+#![forbid(unsafe_code)]
+
 mod citation_checks;
 mod client;
 mod common;

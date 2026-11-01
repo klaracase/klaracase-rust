@@ -161,28 +161,28 @@ fn reason_phrase(status: u16) -> &'static str {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// 401. The token is missing, expired, revoked or of the wrong kind.
+    /// HTTP 401. The token is missing, expired, revoked or of the wrong kind.
     #[error("authentication failed: {0}")]
     Authentication(Box<Problem>),
 
-    /// 403. The token lacks an ability, or the organization or two-factor rules refuse it.
+    /// HTTP 403. The token lacks an ability, or the organization or two-factor rules refuse it.
     /// [`Problem::required_ability`] names the missing ability.
     #[error("permission denied: {0}")]
     Permission(Box<Problem>),
 
-    /// 404. The resource does not exist, or it belongs to another organization.
+    /// HTTP 404. The resource does not exist, or it belongs to another organization.
     #[error("not found: {0}")]
     NotFound(Box<Problem>),
 
-    /// 409. For example `document_unavailable` or `token_org_missing`.
+    /// HTTP 409. For example `document_unavailable` or `token_org_missing`.
     #[error("conflict: {0}")]
     Conflict(Box<Problem>),
 
-    /// 422. The server refused the input. [`Problem::errors`] holds the field errors.
+    /// HTTP 422. The server refused the input. [`Problem::errors`] holds the field errors.
     #[error("validation failed: {0}")]
     Validation(Box<Problem>),
 
-    /// 402. The organization has too few credits. Retrying does not help.
+    /// HTTP 402. The organization has too few credits. Retrying does not help.
     #[error("insufficient credits: {problem}")]
     InsufficientCredits {
         /// Credits the call costs.
@@ -193,7 +193,7 @@ pub enum Error {
         problem: Box<Problem>,
     },
 
-    /// 429. Either `rate_limited` or `volume_cap`. Nothing ran and nothing was charged.
+    /// HTTP 429. Either `rate_limited` or `volume_cap`. Nothing ran and nothing was charged.
     #[error("rate limited: {problem}")]
     RateLimit {
         /// Seconds the server asks you to wait.
@@ -202,7 +202,7 @@ pub enum Error {
         problem: Box<Problem>,
     },
 
-    /// 503. Nothing ran and nothing was charged.
+    /// HTTP 503. Nothing ran and nothing was charged.
     #[error("service unavailable: {0}")]
     ServiceUnavailable(Box<Problem>),
 
