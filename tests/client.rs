@@ -251,3 +251,20 @@ async fn the_token_never_appears_in_an_error_message() {
 
     assert!(!format!("{error} {error:?}").contains("klc_your_token_here"));
 }
+
+#[tokio::test]
+async fn calls_can_run_on_spawned_tasks() {
+    let body = include_str!("fixtures/examples/corpus.coverage.json");
+    let server = MockServer::start(vec![MockResponse::json(200, body)], true).await;
+    let client = client_for(&server, &FakeTime::new());
+
+    let handle = tokio::spawn(async move {
+        client
+            .corpus()
+            .coverage(klaracase::CoverageParams::default())
+            .await
+    });
+
+    let response = handle.await.expect("task").expect("coverage");
+    assert_eq!(response.courts_total, 400);
+}

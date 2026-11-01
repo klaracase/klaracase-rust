@@ -1,0 +1,57 @@
+name: Release
+
+# A tag such as v0.1.0 builds the crate and runs the checks.
+# The publish step is commented out on purpose. See the TODO inside.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: The tag must match the crate version
+        run: |
+          crate_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          test "v${crate_version}" = "${GITHUB_REF_NAME}" || { echo "Tag ${GITHUB_REF_NAME} does not match version ${crate_version}" >&2; exit 1; }
+      - run: cargo test --locked
+      - run: cargo package --locked
+
+  # TODO: the first release must be manual (`cargo publish` from a trusted machine), and trusted
+  # publishing must be configured on crates.io for crate klaracase, repository <org>/klaracase-rust,
+  # workflow release.yml. Then enable this job. Check that the pinned SHA below is still the release
+  # you trust before you enable it.
+  #
+  # publish:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   environment: release
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+  #   steps:
+  #     # actions/checkout v7.0.1
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+  #     - name: Install Rust stable
+  #       run: |
+  #         rustup toolchain install stable --profile minimal
+  #         rustup default stable
+  #     # rust-lang/crates-io-auth-action v1.0.6. Replace with the commit SHA you have reviewed.
+  #     - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9
+  #       id: auth
+  #     - run: cargo publish --locked
+  #       env:
+  #         CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
