@@ -13,7 +13,22 @@ cargo add klaracase
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-The crate needs Rust 1.85 or newer (edition 2024). It runs on tokio only. The default TLS provider is rustls with aws-lc-rs, which compiles C code, so it needs a C compiler and, on some platforms, CMake or NASM. If that build is a problem, use the `native-tls` feature (see TLS below).
+Features:
+
+| Feature | Default | Effect |
+|---|---|---|
+| `rustls` | yes | TLS through rustls. |
+| `native-tls` | no | TLS through the platform library (OpenSSL, Secure Transport, SChannel). |
+| `tokio` | yes | The default sleeper uses `tokio::time`. Without it you must pass your own sleeper to the builder. |
+| `log` | no | The default deprecation hook uses `log::warn!`. |
+| `tracing` | no | A `debug!` event per retry and a `warn!` on a deprecation. See Tracing. |
+| `schemars` | no | `JsonSchema` for the request parameters and request enums. See Agent tools. |
+
+The default TLS provider is rustls with aws-lc-rs. aws-lc-rs compiles C code, so the build needs a C compiler, and on some platforms CMake or NASM. If that is a problem for you, use the platform TLS library:
+
+```toml
+klaracase = { version = "0.1", default-features = false, features = ["native-tls", "tokio"] }
+```
 
 ## Get a token
 
@@ -50,9 +65,66 @@ async fn main() -> Result<(), klaracase::Error> {
 }
 ```
 
-Parameter structs are built with `new(...)` and chained setters. A parameter you do not set is not sent. `limit(0)` and `bridge(false)` are values and are sent. Every parameter struct is `#[non_exhaustive]`, so a new parameter in a later release does not break your code.
+Search, read and graph calls come in two forms. The short form takes what you must give and returns a request with setters: `client.decisions().search("Untreue").court("BGH").send().await`. `client.decisions().get(id)` and `client.norms().get(reference)` take no parameters. The long form takes a ready parameter struct: `search_with(params)`, `get_with(id, params)`. Use it when you build the parameters elsewhere, or read them from JSON.
 
 A response dereferences to its typed body, so `found.results` works. `found.meta` holds the HTTP status, the API release and `request_duration`, the time of the final HTTP attempt (earlier attempts and the waits between them are not counted). `found.credits` says what the call cost. Keys the crate does not model stay in the `extra` map of the struct that held them. `found.raw()` returns the whole answer as `serde_json::Value`, as the server sent it.
+
+## Builders and validation
+
+Every parameter struct is built with `new(...)` or `default()` and chained setters. A parameter you do not set is not sent. `limit(0)` and `bridge(false)` are values and are sent. Every parameter struct is `#[non_exhaustive]`, so a new parameter in a later release does not break your code. Each one implements `Serialize` and `Deserialize` and refuses unknown keys, so a misspelled key in JSON is an error and not a silent drop.
+
+```rust
+use klaracase::{Branch, Mode, SearchDecisionsParams, Statute};
+
+let params = SearchDecisionsParams::new("Vermögensbetreuungspflicht Untreue")
+    .court("BGH")
+    .branch(Branch::Ordentlich)
+    .cited_statute(Statute::StGB)
+    .date_from("2015-01-01")
+    .mode(Mode::Hybrid)
+    .limit(5);
+assert!(params.validate().is_ok());
+```
+
+A setter for a closed list takes the typed value (`Branch::Ordentlich`) or the server's own spelling (`"ordentlich"`). The string form is the way to send a value that this crate does not know yet.
+
+Before it sends a request, the client checks the shape of your input and refuses a bad one with `Error::ClientValidation`. It sends nothing and charges nothing. It checks:
+
+- a query that is blank,
+- a date that is not `YYYY-MM-DD` (`date_from`, `date_to`, `date`, `reference_date`),
+- `date_from` later than `date_to`, and `rn_from` greater than `rn_to`,
+- no ids, or more than ten ids, for a data package,
+- both or neither of `text` and `document_id`,
+- a blank file name, and a path parameter that cannot be encoded safely.
+
+It never checks a number the server owns, such as the maximum `limit`, the length of a query or a page. The server answers those with a 422, which is `Error::Validation`. To let the server judge every call, build the client with `.client_validation(false)`.
+
+## Pagination
+
+A search and a citation graph have pages. `pages(max_pages)` returns a `Pager`. Call `next_page()` in a loop:
+
+```rust,no_run
+use klaracase::Klaracase;
+
+#[tokio::main]
+async fn main() -> Result<(), klaracase::Error> {
+    let client = Klaracase::from_env()?;
+
+    let mut pager = client.decisions().search("Untreue").court("BGH").pages(3);
+    while let Some(page) = pager.next_page().await? {
+        for hit in &page.results {
+            println!("{:?} {:?}", hit.court, hit.aktenzeichen);
+        }
+    }
+    Ok(())
+}
+```
+
+`max_pages` is required. It is a guard against a runaway loop, and it is clamped to what the server serves: 10 pages for a search and 20 for a citation graph. At depth 2 the server serves page 1 only. The walk stops at the first empty page, which it does not return.
+
+Paging the same query within a credit period costs no extra credits. A changed query, filter or mode is a new charge. Check `credits` on each response. Every page is still one request against the rate limit of 60 requests per minute per token.
+
+After an error, the pager keeps its place. Calling `next_page()` again asks for the same page. This crate has no stream dependency, so `Pager` is a plain async method and not a `Stream`.
 
 ## Check the citations in a text
 
@@ -85,7 +157,7 @@ async fn main() -> Result<(), klaracase::Error> {
 }
 ```
 
-The call is synchronous. The answer is the finished run. The closed set of verdicts is `verified_corpus`, `verified_external`, `not_found`, `out_of_coverage`, `ambiguous`, `unverifiable` and `discrepancy`. They are `&str` constants on `Verdict`. A verdict this crate does not know yet stays readable as a string.
+The call is synchronous. The answer is the finished run. The closed set of verdicts is `verified_corpus`, `verified_external`, `not_found`, `out_of_coverage`, `ambiguous`, `unverifiable` and `discrepancy`. They are the variants of `Verdict`. A verdict this crate does not know yet stays readable as a string: the field is an `Open<Verdict>`, and `.known()` returns the variant if there is one.
 
 Read the verdicts with care:
 
@@ -96,7 +168,33 @@ Offsets in a finding are Unicode codepoint offsets into the exact string you sen
 
 You give either `text` or `document_id`, never both. If you give both or neither, the call fails on the client with `Error::ClientValidation` (code `client_validation`) before any request.
 
-### Check an uploaded file
+## Uploads and polling
+
+To check a file, call `check_file`. It reads the file, uploads it, waits until the text is extracted, and then runs the check:
+
+```rust,no_run
+use std::time::Duration;
+use klaracase::Klaracase;
+
+#[tokio::main]
+async fn main() -> Result<(), klaracase::Error> {
+    let client = Klaracase::from_env()?;
+
+    let run = client
+        .citation_checks()
+        .check_file("schriftsatz.pdf")
+        .timeout(Duration::from_secs(90))
+        .reference_date("2024-05-01")
+        .send()
+        .await?;
+    println!("{} findings", run.findings.len());
+    Ok(())
+}
+```
+
+An upload accepts PDF, DOCX, Markdown and plain text up to 25 MB. It is free. The wait is free too. Only the check costs credits, and it runs only when the upload is `ready`. If extraction fails or time runs out, no check runs and nothing is charged.
+
+The steps are also available one by one:
 
 ```rust,no_run
 use std::time::Duration;
@@ -105,11 +203,10 @@ use klaracase::{CreateCitationCheckParams, Klaracase, UploadParams};
 #[tokio::main]
 async fn main() -> Result<(), klaracase::Error> {
     let client = Klaracase::from_env()?;
-    let bytes = std::fs::read("schriftsatz.pdf").expect("read the file");
 
     let receipt = client
         .citation_check_documents()
-        .upload(UploadParams::new(bytes, "schriftsatz.pdf", "application/pdf"))
+        .upload(UploadParams::from_path("schriftsatz.pdf")?)
         .await?;
     let ready = client
         .citation_check_documents()
@@ -126,7 +223,9 @@ async fn main() -> Result<(), klaracase::Error> {
 }
 ```
 
-An upload accepts PDF, DOCX, Markdown and plain text up to 25 MB. It is free. `wait_until_ready` polls every 2 seconds for up to 120 seconds by default. It returns `Error::DocumentFailed` when extraction fails and `Error::DocumentTimeout` when time runs out. The status `ocr_pending` is not final, so the loop keeps going.
+`UploadParams::from_path` reads the file with `std::fs::read`, which blocks the thread for the time the disk takes. It takes the file name from the path and guesses the media type from the extension: `pdf`, `docx`, `md` or `txt`. For any other extension, use `UploadParams::new(bytes, filename, content_type)`.
+
+`wait_until_ready(id, timeout)` polls every 2 seconds. Use `wait_until_ready_with(id, WaitParams)` to change the interval. It returns `Error::DocumentFailed` when extraction fails and `Error::DocumentTimeout` when time runs out. The status `ocr_pending` is not final, so the loop keeps going.
 
 ## Handle errors
 
@@ -178,6 +277,17 @@ The API answers errors as RFC 9457 `application/problem+json`. `Error::problem()
 
 A body that is not a problem (an HTML 502 from a proxy, for example) becomes `Error::Api` with `code` set to `unknown` and the first 1,000 characters of the body in `detail`.
 
+Four helpers cover most handling, so you need not match on every variant:
+
+- `error.is_retryable()` is true for `Transport`, `Timeout`, `RateLimit` and `ServiceUnavailable`. The client has already retried as often as `max_retries` allows when it returns one of them.
+- `error.retry_after()` returns the wait the server asked for, as a `Duration`.
+- `error.status()` and `error.code()` return the HTTP status and the machine code.
+- `error.headers()` returns the response headers. `Authorization` is never in them.
+
+`Problem` also has typed members for the answers that carry data: `candidates` (422 `ambiguous_aktenzeichen`, the decisions to choose from), `successor` (404 `statute_superseded`), and `unit`, `cap` and `resets_at` (429 `volume_cap`). `Problem::extra` still holds every member.
+
+`Error` implements `Serialize`. It writes `{"code", "status", "detail", "retry_after_seconds"}`, which is the form to hand to an agent or a log.
+
 ## Retries
 
 - The client retries a 429 and a 503, up to `max_retries` times (default 2). Both statuses guarantee that nothing ran and nothing was charged, so a retry is safe for every operation, including POST.
@@ -185,6 +295,8 @@ A body that is not a problem (an HTML 502 from a proxy, for example) becomes `Er
 - The wait is `retry_after_seconds` from the body, else the `Retry-After` header, else exponential backoff with full jitter (up to 0.5, 1, 2 seconds, capped at 8).
 - A server-stated wait above 30 seconds is not slept. The client returns the error at once and you decide. A `volume_cap` answer is of this kind.
 - A transport error (connection, DNS, TLS, timeout) is retried for GET only. A POST whose connection dropped after the request was sent is not retried. Repeating it by hand is free in the same period, because one charge covers each operation, organization and subject per calendar month.
+
+## Configure the client
 
 ```rust,no_run
 use std::time::Duration;
@@ -214,25 +326,58 @@ One charge covers each operation, organization and subject per calendar month. T
 
 The API allows 60 requests per minute per token. The three POST operations (`datapackages`, `citation_checks` and `citation_check_documents` upload) are limited to 10 per minute.
 
-## TLS
+## Tracing
 
-The default feature `rustls` uses rustls. To use the platform TLS library instead:
+Enable the `tracing` feature to see what the client does. It emits a `debug!` event for each retry with the method, the path (never the query), the status, the number of the retry and the wait in milliseconds. It emits one `warn!` when the API announces a deprecation. The token and the headers are never in an event.
 
 ```toml
-klaracase = { version = "0.1", default-features = false, features = ["native-tls", "tokio"] }
+klaracase = { version = "0.1", features = ["tracing"] }
 ```
 
-| Feature | Default | Effect |
-|---|---|---|
-| `rustls` | yes | TLS through rustls |
-| `native-tls` | no | TLS through the platform library |
-| `tokio` | yes | the default `Sleeper` uses `tokio::time`. Without it you must pass your own `Sleeper`. |
-| `log` | no | the default deprecation hook uses `log::warn!` |
-| `tracing` | no | a `debug!` event per retry and a `warn!` on a deprecation, through the `tracing` crate. The token is never in an event. |
+Without the feature the client emits nothing. Set a subscriber in your program as usual, for example with `tracing-subscriber` and `RUST_LOG=klaracase=debug`.
 
-## Stability and privacy
+## Agent tools
 
-This SDK is 0.x and tracks API release 0.95.0. Minor versions may change the public surface until 1.0. Every change is listed in [CHANGELOG.md](CHANGELOG.md). All Klaracase SDKs bump together when the API contract changes.
+The `schemars` feature derives `JsonSchema` for every request parameter struct and every request enum. You can turn the schemas into tool definitions for a model, and run the model's calls with the same types. A schema lists the values this crate knows for a closed list, so a model sees the choices. The server may accept more.
+
+`examples/agent_tools.rs` is a complete, small example. It builds five tool definitions from the schemas, runs a call by name, and keeps the answers short: `get_decision` returns at most 4000 characters of text unless the model asks for more, and `check_citations` returns the verdict counts, the unique citations and one short entry per finding. A failed call becomes `{"error": {"code", "status", "detail", "retry_after_seconds"}}`, which a model can read.
+
+```sh
+cargo run --example agent_tools --features schemars
+```
+
+If you want an MCP server and no code of your own, connect your client to `https://klaracase.de/mcp`.
+
+## Testing
+
+The builder takes your own `reqwest::Client` and a `base_url`. Point them at a local mock server in your tests. The client then sends real HTTP to the mock, with all headers and the retry rules in place.
+
+```rust,no_run
+use klaracase::Klaracase;
+
+fn client_for_tests(mock_server_url: &str) -> Result<Klaracase, klaracase::Error> {
+    Klaracase::builder()
+        .token("klc_your_token_here")
+        .base_url(mock_server_url)
+        .http_client(reqwest::Client::new())
+        .max_retries(0)
+        .build()
+}
+```
+
+Set `max_retries(0)` when a test expects the first error, so the test does not wait for a retry. This crate's own tests run against a mock server on a raw socket, with the 102 shared conformance cases from `tests/fixtures/conformance`.
+
+## Requirements
+
+- Rust 1.85 or newer (edition 2024). CI tests the minimum version.
+- tokio only. The client is async and its default sleeper uses `tokio::time`. It needs a tokio runtime. Other runtimes are not supported. Without the `tokio` feature you must pass your own sleeper, which is meant for tests.
+- TLS: rustls (default) or the platform library (`native-tls`). See Install for the build note.
+
+## Versioning
+
+This SDK is 0.x and tracks API release 0.95.0. Until 1.0, a minor version (0.1 to 0.2) may change the public surface, and a patch version (0.1.0 to 0.1.1) will not break your code. CI runs `cargo semver-checks` against the previous release tag to catch an accidental break. Every change is listed in [CHANGELOG.md](CHANGELOG.md). All Klaracase SDKs bump together when the API contract changes.
+
+## Privacy
 
 The SDK sends no telemetry. The only thing it adds to a request is the User-Agent header `klaracase-rust/<version> rust/<version>`, for example `klaracase-rust/0.1.0 rust/1.85.0`.
 
@@ -244,7 +389,7 @@ Klaracase is not affiliated with any court or with the federal government.
 - MCP server for agents: <https://klaracase.de/mcp>, tools guide at <https://klaracase.de/docs/mcp>
 - Support: support@klaracase.de
 
-Run `make test` for the tests and `make lint` for formatting, clippy and docs. `make smoke` calls the two free endpoints with a real token. It is not part of CI.
+Run `make test` for the tests and `make lint` for formatting, clippy and docs. `make sync-check` compares the test fixtures with the shared contract folder. `make smoke` calls the two free endpoints with a real token. It is not part of CI.
 
 ## License
 
