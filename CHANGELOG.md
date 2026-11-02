@@ -16,7 +16,8 @@ the changes made to the first draft.
   absent and the crate writes nothing back. Unknown keys stay in `extra`.
 - `Error::InsufficientCredits` gains `reason: Option<Open<InsufficientCreditsReason>>` (`ApiBudgetEmpty`,
   `ApiBudgetNotAvailable`, and `PlanCreditsExhausted`, reserved) and `top_up_url: Option<String>`. A reason this
-  crate does not know stays a string in `Open::Other`.
+  crate does not know stays a string in `Open::Other`. It also gains `api_budget: Option<Box<ApiBudget>>`, read from
+  the optional `api_budget` object of the 402 problem; `None` when the problem has none.
 - `Error::TokenLimitReached` for the 402 `token_limit_reached` of an API key at its credit limit, with `unit`,
   `cap`, `spent`, `resets_at` (the RFC 3339 string as sent) and `settings_url`. It has no `cost` and no
   `balance`. It is never retried and `is_retryable()` is false, like every 402.

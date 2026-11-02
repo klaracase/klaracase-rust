@@ -11,6 +11,7 @@ use reqwest::header::{HeaderMap, HeaderName};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::{Map, Value};
 
+use crate::common::ApiBudget;
 use crate::documents::DocumentReceipt;
 use crate::open::{Open, response_struct};
 use crate::types::InsufficientCreditsReason;
@@ -247,6 +248,15 @@ fn extra_text(problem: &Problem, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn extra_api_budget(problem: &Problem) -> Option<Box<ApiBudget>> {
+    problem
+        .extra
+        .get("api_budget")
+        .filter(|value| value.is_object())
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .map(Box::new)
+}
+
 fn reason_phrase(status: u16) -> &'static str {
     match status {
         400 => "Bad Request",
@@ -339,6 +349,11 @@ pub enum Error {
         /// it to your user, and never open or follow it from a program or an AI agent. `None` when
         /// the organization may not load a budget.
         top_up_url: Option<String>,
+        /// The prepaid API budget as it stands, the same object as `credits.api_budget` on an
+        /// answer. The API sends it only while the API budget is available and the organization
+        /// holds a budget or may load one. Boxed, like the problem, to keep [`enum@Error`] small. `None`
+        /// when the problem has no `api_budget` object.
+        api_budget: Option<Box<ApiBudget>>,
         /// The full problem.
         problem: Box<Problem>,
     },
@@ -568,6 +583,7 @@ impl Error {
                 balance: problem.extra.get("balance").and_then(Value::as_i64),
                 reason: extra_text(&problem, "reason").map(Open::from),
                 top_up_url: extra_text(&problem, "top_up_url"),
+                api_budget: extra_api_budget(&problem),
                 problem,
             },
             403 => Self::Permission(problem),
@@ -681,6 +697,45 @@ mod tests {
             Some("https://klaracase.de/org/billing/api-budget")
         );
         assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn insufficient_credits_exposes_the_api_budget_object() {
+        let error = error(
+            402,
+            &json!({
+                "code": "insufficient_credits", "cost": 1, "balance": 0,
+                "reason": "api_budget_empty",
+                "api_budget": {"cents": 0, "rate_cents_per_credit": 25, "credits_at_rate": 0}
+            }),
+        );
+        let Error::InsufficientCredits {
+            api_budget,
+            problem,
+            ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        let budget = api_budget.expect("api_budget");
+        assert_eq!(budget.cents, Some(0));
+        assert_eq!(budget.rate_cents_per_credit, Some(25));
+        assert_eq!(budget.credits_at_rate, Some(0));
+        assert_eq!(problem.extra["api_budget"]["cents"], 0);
+    }
+
+    #[test]
+    fn a_missing_or_wrong_typed_api_budget_reads_none() {
+        for body in [
+            json!({"code": "insufficient_credits", "cost": 1, "balance": 0}),
+            json!({"code": "insufficient_credits", "api_budget": "free"}),
+        ] {
+            let error = error(402, &body);
+            let Error::InsufficientCredits { api_budget, .. } = error else {
+                panic!("{error:?}");
+            };
+            assert_eq!(api_budget, None);
+        }
     }
 
     #[test]
